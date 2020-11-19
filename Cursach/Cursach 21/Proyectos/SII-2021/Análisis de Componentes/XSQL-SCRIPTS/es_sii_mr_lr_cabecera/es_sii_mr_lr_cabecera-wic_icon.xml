@@ -1,0 +1,229 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_mr_lr_cabecera                                              -->
+<!--                                                                         -->
+<!-- Rutina para la generación del mensaje Cabecera                          -->
+<!--                                                                         -->
+<!-- Package: "es_sii_mr"     mr = Make Requests                             -->
+<!--                                                                         -->
+<!-- es_sii_mr_lr_cabecera                                                   -->
+<!--     es_sii = Módulo SII                                                 -->
+<!--     mr     = Make Requests                                              -->
+<!--     lr     = Libro Registro                                             -->
+<!--     cabecera = Mensaje común Cabecera                                   -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_mr_lr_cabecera'>
+
+    <args>
+        <arg name='p_ejercicio'             type='integer' />
+        <arg name='p_admon'                 type='string' />
+        <arg name='p_empcode'               type='string' />
+        <arg name='p_niftitular'            type='string' />
+        <arg name='p_nombre_razon_titular'  type='string' />
+        <arg name='p_idversionsii'          type='string' />
+        <arg name='p_libro'                 type='string' />
+        <arg name='p_tipocomunicacion'      type='string' />    <!-- A0  Alta de facturas/registro                                -->
+                                                                <!-- A1  Modificación de facturas/registros (errores registrales) -->
+                                                                <!-- A4  Modificación Factura Régimen de Viajeros                 -->
+                                                                <!-- B   Baja. ( Adaptación Axional )                             -->
+        <arg name='p_method_code'           type='string' />
+    </args>
+
+    <body>
+
+        <!-- ======================================================================= -->
+        <!-- Libros registros:                                                       -->
+        <!--                                                                         -->
+        <!--    FE  Facturas Emitidas                                                -->
+        <!--    FR  Facturas Recibidas                                               -->
+        <!--    BI  Bienes de Inversión                                              -->
+        <!--    OI  Determinadas Operaciones Intracomunitarias                       -->
+        <!--                                                                         -->
+        <!--    CE  Cobros Emitidas      ( RECC Régimen Especial Criterio de Caja )  -->
+        <!--    PR  Pagos Recibidas      ( RECC Régimen Especial Criterio de Caja )  -->
+        <!--                                                                         -->
+        <!--    CM  Cobros Metalico      ( Anual )                                   -->
+        <!--    OS  Operaciones Seguros  ( Anual )                                   -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Si no es CE  Cobros Emitidas  y  PR  Pagos Recibidas                    -->
+        <!-- y  no es Baja ni Consulta informamos el tipo de comunicación.           -->
+        <!-- ======================================================================= -->
+        <set name='str_comunicacion'><string/></set>
+        <if>
+            <expr>
+                <!-- Excepto CE  Cobros Emitidas  y  PR  Pagos Recibidas -->
+                <not><string.regexp><p_libro/><string>(CE|PR)</string></string.regexp></not>
+            </expr>
+            <then>
+
+                <if>
+                    <expr>
+                        <!-- Excepto Bajas y Consultas -->
+                        <not><string.regexp><p_tipocomunicacion/><string>(B|C)</string></string.regexp></not>
+                    </expr>
+                    <then>
+                        <set name='str_comunicacion'><xml.sii:TipoComunicacion><p_tipocomunicacion/></xml.sii:TipoComunicacion></set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <select prefix='cwsi_methods_' required='Methode [${p_method_code}] notfound!'>
+            <columns>
+                *
+            </columns>
+            <from table='cwsi_methods' />
+            <where>
+                    method_code = <p_method_code/>
+            </where>
+        </select>
+
+        <!-- Sustituimos Anulacion por Baja Se trata de una diferencia entre el nombre del método y el nombre de la operacion. -->
+        <set name='m_operation'><string.replaceAll><cwsi_methods_method_name/><string>Anulacion</string><string>Baja</string></string.replaceAll></set>
+
+        <!-- ======================================================================= -->
+        <!-- sii:Envelope                                                            -->
+        <!--                                                                         -->
+        <!-- Código de administración competencia inspectora:                        -->
+        <!--      00  Territorio común                                               -->
+        <!--      01  Diputación foral de Álava                                      -->
+        <!--      02  Diputación foral de Guipúzcoa                                  -->
+        <!--      03  Diputación foral de Vizcaya                                    -->
+        <!--      04  Diputación foral de Navarra                                    -->
+        <!--                                                                         -->
+        <!-- Este contenido se ha extraido del fichero SuministroLR.xsd facilitado   -->
+        <!-- por la administración correspondiente.                                  -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <switch name='p_admon'>
+            <!-- 00  Territorio común -->
+            <case value='00'>
+<!-- Extracto fichero SuministroLR.xsd
+<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:siiLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroLR.xsd" xmlns:sii="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroInformacion.xsd" targetNamespace="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroLR.xsd" elementFormDefault="qualified">
+-->
+                <set name='m_envelope'>
+<![CDATA[
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+xmlns:siiLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroLR.xsd"
+xmlns:sii="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroInformacion.xsd">
+]]>
+                </set>
+            </case>
+            <!-- 01  Diputación foral de Álava -->
+<!-- Extracto fichero SuministroLR.xsd
+<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:siiLR="https://sii.araba.eus/documentos/SuministroLR.xsd" xmlns:sii="https://sii.araba.eus/documentos/SuministroInformacion.xsd" targetNamespace="https://sii.araba.eus/documentos/SuministroLR.xsd" elementFormDefault="qualified">
+-->
+            <case value='01'>
+                <set name='m_envelope'>
+<![CDATA[
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+xmlns:siiLR="https://sii.araba.eus/documentos/SuministroLR.xsd"
+xmlns:sii="https://sii.araba.eus/documentos/SuministroInformacion.xsd">
+]]>
+                </set>
+            </case>
+            <!-- 02  Diputación foral de Guipúzcoa -->
+<!-- Extracto fichero SuministroLR.xsd
+<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:siiLR="https://egoitza.gipuzkoa.eus/ogasuna/sii/ficheros/SuministroLR.xsd" xmlns:sii="https://egoitza.gipuzkoa.eus/ogasuna/sii/ficheros/SuministroInformacion.xsd" targetNamespace="https://egoitza.gipuzkoa.eus/ogasuna/sii/ficheros/SuministroLR.xsd" elementFormDefault="qualified">
+-->
+            <case value='02'>
+                <set name='m_envelope'>
+<![CDATA[
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+xmlns:siiLR="https://egoitza.gipuzkoa.eus/ogasuna/sii/ficheros/SuministroLR.xsd"
+xmlns:sii="https://egoitza.gipuzkoa.eus/ogasuna/sii/ficheros/SuministroInformacion.xsd">
+]]>
+                </set>
+            </case>
+            <!-- 03  Diputación foral de Vizcaya -->
+<!-- Extracto fichero SuministroLR.xsd
+<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:siiLR="http://www.bizkaia.eus/ogasuna/sii/documentos/SuministroLR.xsd" xmlns:sii="http://www.bizkaia.eus/ogasuna/sii/documentos/SuministroInformacion.xsd" targetNamespace="http://www.bizkaia.eus/ogasuna/sii/documentos/SuministroLR.xsd" elementFormDefault="qualified">
+-->
+            <case value='03'>
+                <set name='m_envelope'>
+<![CDATA[
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+xmlns:siiLR="http://www.bizkaia.eus/ogasuna/sii/documentos/SuministroLR.xsd"
+xmlns:sii="http://www.bizkaia.eus/ogasuna/sii/documentos/SuministroInformacion.xsd">
+]]>
+                </set>
+            </case>
+            <!-- 04  Diputación foral de Navarra ; Idem que AEAT 00  Territorio común -->
+<!--
+http://www.navarra.es/home_es/Gobierno+de+Navarra/Organigrama/Los+departamentos/Economia+y+Hacienda/Organigrama/Estructura+Organica/Hacienda/Informacion.htm
+
+Con la finalidad de simplificar a los contribuyentes la adaptación de sus sistemas al cumplimiento de la obligación de realizar el Suministro Inmediato de Información (SII) a las distintas Administraciones Tributarias, la Hacienda Tributaria Navarra ha decidido implantar las tecnologías y mensajes establecidos para el intercambio con la AEAT.
+-->
+            <case value='04'>
+                <set name='m_envelope'>
+<![CDATA[
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+xmlns:siiLR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroLR.xsd"
+xmlns:sii="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroInformacion.xsd">
+]]>
+                </set>
+            </case>
+            <default>
+                <exception>Administración competencia inspectora [<p_admon/>] no soportada.</exception>
+            </default>
+        </switch>
+
+        <!-- ======================================================================= -->
+        <!-- Verifica service_name                                                   -->
+        <!-- ======================================================================= -->
+        <switch name='cwsi_methods_service_name'>
+            <case value='SuministroFactEmitidas'   />
+            <case value='SuministroFactRecibidas'  />
+
+            <case value='SuministroCobrosEmitidas' />
+            <case value='SuministroPagosRecibidas' />
+
+            <case value='SuministroBienesInversion'  />
+
+            <case value='SuministroOpTrascendTribu' />      <!-- LRCobrosMetalico y LROperacionesSeguros -->
+
+            <case value='SuministroInmueblesAdicionales' />
+
+            <default>
+                <exception>Servicio [<cwsi_methods_service_name/>] no soportado.</exception>
+            </default>
+        </switch>
+
+        <!-- ======================================================================= -->
+        <!-- sii:NIFRepresentante                                                    -->
+        <!-- ======================================================================= -->
+        <!--
+        2.5. ¿Cuándo debe cumplimentarse el campo “NIF representante” en la cabecera y dentro del bloque “Contraparte”?
+        Si el NIF es de un menor (empieza por K).
+        -->
+
+        <!-- ======================================================================= -->
+        <!-- sii:Cabecera                                                            -->
+        <!-- ======================================================================= -->
+        <set name='m_cabecera'>
+            <xml.sii:Cabecera>
+                <xml.sii:IDVersionSii><p_idversionsii/></xml.sii:IDVersionSii>
+                    <xml.sii:Titular>
+                        <xml.sii:NombreRazon><p_nombre_razon_titular/></xml.sii:NombreRazon>
+                        <xml.sii:NIF><p_niftitular/></xml.sii:NIF>
+                    </xml.sii:Titular>
+                <str_comunicacion/>
+            </xml.sii:Cabecera>
+        </set>
+
+        <return>
+            <m_operation/>
+            <m_envelope/>
+            <m_cabecera/>
+        </return>
+
+    </body>
+</xsql-script>

@@ -1,0 +1,1401 @@
+<xsql-script name='es_sii_mr_lrfr'>
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_mr_lrfr                                                     -->
+<!--                                                                         -->
+<!-- Proceso para la generación del mensaje de solicitud de una factura      -->
+<!-- recibida para el sistema SII.                                           -->
+<!--                                                                         -->
+<!--     SuministroLRFacturasRecibida:     Altas y Modificaciones            -->
+<!--     BajaLRFacturasRecibidas:          Bajas / Anulación                 -->
+<!--                                                                         -->
+<!-- No incluye Envelope, Body ni Cabecera                                   -->
+<!--                                                                         -->
+<!-- Se invoca desde al proceso principal de generación de mensajes:         -->
+<!--                                                                         -->
+<!-- Package: "es_sii_mr"     mr = Make Requests                             -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+
+        <args>
+            <arg name='p_empcode'               type='string' />
+            <arg name='p_nifpresentador'        type='string' />
+            <arg name='p_head_seqno'            type='integer' />
+            <arg name='p_idemisor'              type='string' />
+            <arg name='p_numfactura'            type='string' />
+            <arg name='p_fechafactura'          type='date' />
+            <arg name='p_ejercicio'             type='string' />
+            <arg name='p_periodo'               type='string' />
+            <arg name='p_tipofactura'           type='string' />
+            <arg name='p_claveoperacion'        type='string' />
+            <arg name='p_claveoperaciona1'      type='string' />
+            <arg name='p_claveoperaciona2'      type='string' />
+            <arg name='p_importetotal'          type='decimal' />
+            <arg name='p_descoperacion'         type='string' />
+            <arg name='p_idversionsii'          type='string' />
+            <arg name='p_tipocomunicacion'      type='string' />    <!-- A0  Alta de facturas/registro                                -->
+                                                                    <!-- A1  Modificación de facturas/registros (errores registrales) -->
+                                                                    <!-- A4  Modificación Factura Régimen de Viajeros                 -->
+                                                                    <!-- B   Baja. ( Adaptación Axional )                             -->
+        </args>
+
+    <body>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_get_nif_or_idotro                                            -->
+        <!--                                                                         -->
+        <!-- Devuelve tags nif y idotro                                              -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_get_nif_or_idotro'>
+            <args>
+                <arg name='p_nif'       	type='string' />
+				<arg name='p_numfactura'    type='string' />
+				<arg name='p_fechafactura'  type='date' />				
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!-- El contenido de p_nif debe ser autosuficiente para determinar    -->
+                <!-- el país y a partir del país determinar si es intracomunitario o no.     -->
+                <!-- El motivo es que para comunicar las bajas de facturas no disponemos de  -->
+                <!-- soporte en cimpcont_head y por lo tanto tampoco de cimpcont que es      -->
+                <!-- donde se ubica el código de país.                                       -->
+                <!-- ======================================================================= -->
+                <set name='m_nif_spain'><p_nif/></set>
+                <set name='m_len'><string.length><p_nif/></string.length></set>
+                <if>
+                    <expr>
+                        <le><m_len/>2</le>
+                    </expr>
+                    <then>
+					
+						<select prefix='m_'>
+							<columns>FIRST 1 ctiponac.coda2</columns>
+							<from table='cimpcont'>
+								<join table='ctiponac' type='inner'>
+									<on>ctiponac.codigo = cimpcont.codnac</on>
+								</join>
+							</from>
+							<where>docser = <p_numfactura/> AND fecdoc = <p_fechafactura/> AND cif = <p_nif/></where>
+						</select>
+					
+                        <set name='m_str_nif'><string/></set>
+                        <set name='m_str_idotro'><xml.sii:IDOtro>
+													<xml.sii:CodigoPais><m_coda2/></xml.sii:CodigoPais>
+													<xml.sii:IDType>06</xml.sii:IDType>
+													<xml.sii:ID>0</xml.sii:ID>
+												</xml.sii:IDOtro>
+						</set>
+                        <return>
+                            <m_nif_spain/>
+                            <m_str_nif/>
+                            <m_str_idotro/>
+                        </return>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Obtiene NIF, País, idtype, etc.                                         -->
+                <!-- IDType                                                                  -->
+                <!-- L4 Tipos de Identificación en el país de residencia  (Pag 71)           -->
+                <!--    02 NIF-IVA                                                           -->
+                <!--    03 PASAPORTE                                                         -->
+                <!--    04 DOCUMENTO OFICIAL DE IDENTIFICACIÓN EXPEDIDO POR EL PAIS O TERRITORIO DE RESIDENCIA -->
+                <!--    05 CERTIFICADO DE RESIDENCIA                                         -->
+                <!--    06 OTRO DOCUMENTO PROBATORIO                                         -->
+                <!-- ======================================================================= -->
+
+                <set name='m_coda2'><string.substring><p_nif/><number>0</number><number>2</number></string.substring></set>
+				
+				<!-- CURSACH NIF de Grecia EL... debe ser GR -->
+				<if>
+					<expr>
+						<eq><m_coda2/>EL</eq>
+					</expr>
+					<then>
+						<set name='m_coda2'>GR</set>
+					</then>
+				</if>
+				
+                <if>
+                    <expr>
+                        <string.regexp><m_coda2/><string>[A-Z]{2,2}</string></string.regexp>
+                    </expr>
+                    <then>
+                        <select prefix='m_'>
+                            <columns>
+                                ctiponac.coda2,
+                                CASE WHEN ctiponac.coda2 = 'ES'
+                                          THEN CASE WHEN <substr><p_nif/>,1,2</substr> = 'ES'
+                                                    THEN <substr><p_nif/>,3,11</substr>
+                                                    ELSE <substr><p_nif/>,1,9</substr>
+                                                END
+                                          ELSE NULL
+                                 END AS nif_spain,
+                                CASE WHEN ctiponac.coda2  = 'ES'                        THEN NULL
+                                     WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 1 THEN '02'
+                                     WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 0 THEN '04'
+                                     ELSE '06'
+                                 END AS idtype,
+                                CASE WHEN ctiponac.indue = 1 THEN <p_nif/>      <!-- No limpia el código de país (coda2) de intracomunitarios ! -->
+                                          ELSE CASE WHEN ctiponac.coda2 = <substr><p_nif/>,1,2</substr>
+                                                    THEN <substr><p_nif/>,3</substr>
+                                                    ELSE <p_nif/>
+                                                END
+                                 END AS nif_otro
+                            </columns>
+                            <from table='ctiponac'/>
+                            <where>
+                                    ctiponac.coda2 = <m_coda2/>
+                            </where>
+                        </select>
+                        <if>
+                            <expr>
+                                <isnull><m_nif_otro/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_nif_spain'><p_nif/></set>
+                            </then>
+                        </if>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- NIF                                                                     -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><m_nif_spain/></isnotnull>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- NIF español                                                             -->
+                        <!-- ======================================================================= -->
+                        <set name='m_str_nif'><xml.sii:NIF><m_nif_spain/></xml.sii:NIF></set>
+                        <set name='m_str_idotro'><string/></set>
+                    </then>
+                    <else>
+                        <!-- ======================================================================= -->
+                        <!-- NIF extranjero                                                          -->
+                        <!-- ======================================================================= -->
+                        <set name='m_str_nif'><string/></set>
+                        <set name='m_str_idotro'>
+                            <xml.sii:IDOtro>
+                                <xml.sii:CodigoPais><m_coda2/></xml.sii:CodigoPais>
+                                <xml.sii:IDType><m_idtype/></xml.sii:IDType>
+                                <xml.sii:ID><m_nif_otro/></xml.sii:ID>
+                            </xml.sii:IDOtro>
+                        </set>
+                    </else>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return>
+                    <m_nif_spain/>
+                    <m_str_nif/>
+                    <m_str_idotro/>
+                </return>
+
+            </body>
+        </function>
+
+        <!-- ======================================================================= -->
+        <!-- MAIN PROCESS                                                            -->
+        <!-- ======================================================================= -->
+        <set name='m_natfac'>C</set>
+        <set name='m_msg_id_factura'><string>Factura recibida. <string.nl/>Empresa: [<p_empcode/>] <string.nl/>Presentador: [<p_nifpresentador/>] <string.nl/>Id Emisor: [<p_idemisor/>] <string.nl/>Número de factura: [<p_numfactura/>] <string.nl/>Fecha de factura: [<p_fechafactura/>] <string.nl/>Tipo de comunicación: [<p_tipocomunicacion/>] <string.nl/>Id registro: [<ifnull><p_head_seqno/><string/></ifnull>]</string></set>
+
+        <!-- ======================================================================= -->
+        <!-- Determina si cimpcont TABLE o cimpcont_v VIEW                           -->
+        <!-- ======================================================================= -->
+        <set name='m_cimpcont_access'><local_get_tableorview>cimpcont</local_get_tableorview></set>
+
+        <!-- ======================================================================= -->
+        <!-- Comprueba el tipo de comunicación                                       -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <not><string.regexp><p_tipocomunicacion/><string>(A0|A1|B)</string></string.regexp></not>
+            </expr>
+            <then>
+                <exception><string>Comunicación [<p_tipocomunicacion/>] no soportada. <string.nl/><m_msg_id_factura/></string></exception>
+            </then>
+        </if>
+
+        <!-- ======================================================================== -->
+        <!-- Analiza si existe la columna cempresa.grpent                             -->
+        <!-- ======================================================================== -->
+        <set name='m_exists_col_grpent'><table.findColumnIndex table='cempresa' column='grpent' /></set>
+
+        <!-- ======================================================================= -->
+        <!-- sii:PeriodoImpositivo                                                   -->
+        <!-- ======================================================================= -->
+        <set name='str_periodoimpositivo'>
+            <xml.sii:PeriodoImpositivo>
+                <xml.sii:Ejercicio><p_ejercicio/></xml.sii:Ejercicio>
+                <xml.sii:Periodo><p_periodo/></xml.sii:Periodo>
+            </xml.sii:PeriodoImpositivo>
+        </set>
+
+        <!-- ======================================================================= -->
+        <!-- En Compras NIF emisor y NIF contraparte contienen el mismo valor.       -->
+        <!-- ======================================================================= -->
+        <local_get_nif_or_idotro into='m_nif_spain, m_idemisorfactura_nif, m_idemisorfactura_idotro'>
+            <p_idemisor/>
+			<p_numfactura/>
+			<p_fechafactura/>
+        </local_get_nif_or_idotro>
+        <set name='m_contraparte_nif'><m_idemisorfactura_nif/></set>
+        <set name='m_contraparte_idotro'><m_idemisorfactura_idotro/></set>
+
+        <!-- ======================================================================= -->
+        <!-- MENSAJE BAJA:                                                           -->
+        <!-- Tipo de comunicación:                                                   -->
+        <!--    Alta / Modificación: siiLR:RegistroLRFacturasRecibidas               -->
+        <!--    Baja:                siiLR:RegistroLRBajaRecibidas                   -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <eq><p_tipocomunicacion/>B</eq>
+            </expr>
+            <then>
+
+                <!-- ======================================================================= -->
+                <!-- siiLR:IDFactura                                                         -->
+                <!-- ======================================================================= -->
+                <!-- ======================================================================= -->
+                <!-- NOTA: XUDP cimpcont_head_upgrade                                        -->
+                <!-- 16-06-2017 ATENCIÓN - REPENSAR EN FUTURAS VERSIONES:                    -->
+                <!-- Si vamos a comnicar una BAJA de una FACTURA RECIBIDA nos guardamos el   -->
+                <!-- nombre del proveedor para informar la etiqueta NombreRazon en la        -->
+                <!-- identificación de la factura del mensaje de BAJA.                       -->
+                <!-- Es un dato requerido desde la versión 0.7 y nos hemos dado cuenta       -->
+                <!-- demasiado tarde para pensar una solución mejor encuadrada.              -->
+                <!-- ======================================================================= -->
+                <set name='m_nombrerazon'><local_str_fixlen><p_descoperacion/><number>120</number></local_str_fixlen></set>
+                <set name='str_idfactura_baja'>
+                    <xml.siiLR:IDFactura>
+                        <xml.sii:IDEmisorFactura>
+                            <xml.sii:NombreRazon><m_nombrerazon/></xml.sii:NombreRazon>
+                            <m_idemisorfactura_nif/><m_idemisorfactura_idotro/>
+                        </xml.sii:IDEmisorFactura>
+                        <xml.sii:NumSerieFacturaEmisor><p_numfactura/></xml.sii:NumSerieFacturaEmisor>
+                        <xml.sii:FechaExpedicionFacturaEmisor><date.format format='dd-MM-yyyy'><p_fechafactura/></date.format></xml.sii:FechaExpedicionFacturaEmisor>
+                    </xml.siiLR:IDFactura>
+                </set>
+
+                <set name='m_message_one_invoice'>
+                    <xml.siiLR:RegistroLRBajaRecibidas>
+                        <str_periodoimpositivo/>
+                        <str_idfactura_baja/>
+                    </xml.siiLR:RegistroLRBajaRecibidas>
+                </set>
+                <return>
+                    <m_message_one_invoice/>
+                </return>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- MENSAJE ALTA o MODIFICACIÓN:                                            -->
+        <!-- Tipo de comunicación:                                                   -->
+        <!--    Alta / Modificación: siiLR:RegistroLRFacturasRecibidas               -->
+        <!--    Baja:                siiLR:RegistroLRBajaRecibidas                   -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- siiLR:FacturaRecibida                                                   -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <select prefix='cimpcont_head_aux_' required='Registro [${p_head_seqno}] no encontrado.'>
+            <columns>
+                cimpcont_head.cif,
+                cimpcont_head.orden,
+                <date>cimpcont_head.date_created</date> AS fecharegcontable,
+                cimpcont_head_aux.*
+            </columns>
+            <from table='cimpcont_head'>
+                <join type='left' table='cimpcont_head_aux'>
+                    <on>cimpcont_head.head_seqno = cimpcont_head_aux.head_seqno</on>
+                </join>
+            </from>
+            <where>
+                    cimpcont_head.head_seqno  = <p_head_seqno/>
+                AND cimpcont_head.natfac      = <m_natfac/>
+            </where>
+        </select>
+        <set name='cimpcont_head_cif'><cimpcont_head_aux_cif/></set>
+        <set name='cimpcont_head_orden'><cimpcont_head_aux_orden/></set>
+        <set name='cimpcont_head_fecharegcontable'><cimpcont_head_aux_fecharegcontable/></set>
+        <unset name='cimpcont_head_aux_cif'/>
+        <unset name='cimpcont_head_aux_orden'/>
+        <unset name='cimpcont_head_aux_fecharegcontable'/>
+
+        <!-- ======================================================================= -->
+        <!-- sii:BaseImponibleACoste                                                 -->
+        <!--     Para grupos de IVA                                                  -->
+        <!--                                                                         -->
+        <!-- ClaveRegimenEspecialOTrascendencia   (Emitidas y Recibidas)             -->
+        <!--                                                                         -->
+        <!-- L3 FE  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!-- L3 FR  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!--                                                                         -->
+        <!-- Ejemplos de operaciones intragrupo:
+        Código  Descripción                                                         Modelo 303   Descripción
+
+        CAE     Compras nacionales de arrendamientos intragrupo                   2.20         IVA Deducible - Por cuotas soportadas en operaciones interiores corrientes
+        CNE     Compras nacionales de bienes y servicios corrientes intragrupo    2.20         IVA Deducible - Por cuotas soportadas en operaciones interiores corrientes
+        CNIE    Compras nacionales de bienes y servicios de inversión intragrupo  2.20         IVA Deducible - Por cuotas soportadas en operaciones interiores corrientes
+
+        VAE     Ventas nacionales de arrendamientos intragrupo                    1.05         IVA Devengado - Régimen general
+        VNE     Ventas nacionales de bienes y servicios corrientes intragrupo     1.05         IVA Devengado - Régimen general
+        VNIE    Ventas nacionales de bienes y servicios de inversión intragrupo   1.05         IVA Devengado - Régimen general
+        -->
+        <!-- ======================================================================= -->
+        <set name='m_baseimponibleacoste'>0</set>
+        <set name='cempresa_grpent'><null/></set>
+        <if>
+            <expr>
+                <eq><p_claveoperacion/><string>06</string></eq>
+            </expr>
+            <then>
+                <!-- ======================================================================= -->
+                <!-- Verifica que la empresa pertenezca a un grupo de entidades.             -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <gt><m_exists_col_grpent/>0</gt>
+                    </expr>
+                    <then>
+                        <select prefix='cempresa_' required='Empresa [${p_empcode}] no encontrada.'>
+                            <columns>grpent</columns>
+                            <from table='cempresa'/>
+                            <where>
+                                empcode = <p_empcode/>
+                            </where>
+                        </select>
+                    </then>
+                </if>
+                <if>
+                    <expr>
+                        <isnull><cempresa_grpent/></isnull>
+                    </expr>
+                    <then>
+                        <exception><string>Operación [<p_claveoperacion/>] declarada en régimen especial grupo de entidades en IVA (Nivel Avanzado) pero la empresa no tiene informado el código de grupo de entidades (cempresa.grpent). <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Obtiene NIF, País, idtype, etc.                                         -->
+        <!-- IDType                                                                  -->
+        <!-- L4 Tipos de Identificación en el país de residencia  (Pag 71)           -->
+        <!--    02 NIF-IVA                                                           -->
+        <!--    03 PASAPORTE                                                         -->
+        <!--    04 DOCUMENTO OFICIAL DE IDENTIFICACIÓN EXPEDIDO POR EL PAIS O TERRITORIO DE RESIDENCIA -->
+        <!--    05 CERTIFICADO DE RESIDENCIA                                         -->
+        <!--    06 OTRO DOCUMENTO PROBATORIO                                         -->
+        <!-- ======================================================================= -->
+<!-- fcmfcm DESHABILITO: old_contraparte_
+        <select prefix='old_contraparte_' required='Registro [${cimpcont_head_orden}] no encontrado.'>
+            <columns>
+                ctiponac.coda2,
+                 Tercero Español o Extranjero residente en España con NIE otorgado.
+                CASE WHEN ctiponac.coda2 = 'ES'
+                          THEN CASE WHEN <substr>cimpcont.cif,1,2</substr> = 'ES'
+                                    THEN <substr>cimpcont.cif,3,11</substr>
+                                    ELSE <substr>cimpcont.cif,1,9</substr>
+                                END
+                          ELSE NULL
+                 END AS nif_spain,
+                CASE WHEN ctiponac.coda2  = 'ES'                        THEN '02'
+                     WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 1 THEN '04'
+                     WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 0 AND cimpcont.cif != (ctiponac.coda2 || cimpcont.tercer) THEN '04'
+                      País distinto de España y no se dispone de CIF:
+                      Puede adoptarse el convenio ctercero.cif = ctiponc.coda2 + ctercero.codigo
+                      en talk caso el idtype es igual a 06 OTRO DOCUMENTO PROBATORI
+                     WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 0 AND cimpcont.cif  = (ctiponac.coda2 || cimpcont.tercer) THEN '06'
+                     ELSE '06'
+                 END AS idtype,
+                 NIF contraparte sin código de país.
+                CASE WHEN ctiponac.coda2 = <substr>cimpcont.cif,1,2</substr>
+                          THEN <substr>cimpcont.cif,3</substr>
+                          ELSE cimpcont.cif
+                 END AS nif_contraparte
+            </columns>
+            <from table='${m_cimpcont_access}' alias='cimpcont'>
+                <join type='left' table='ctiponac'>
+                    <on>cimpcont.codnac = ctiponac.codigo</on>
+                </join>
+            </from>
+            <where>
+                    cimpcont.empcode  = <p_empcode/>
+                AND cimpcont.natfac   = <m_natfac/>
+                AND cimpcont.docser   = <p_numfactura/>
+                AND cimpcont.cif      = <cimpcont_head_cif/>
+                AND cimpcont.fecdoc   = <p_fechafactura/>
+                AND cimpcont.valida  != 'N'
+                AND cimpcont.tipimp   = 'N'
+                AND cimpcont.orden    = <cimpcont_head_orden/>
+            </where>
+        </select>
+-->
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+<!-- fcmfcm
+        <if>
+            <expr>
+                <isnull><contraparte_coda2/></isnull>
+            </expr>
+            <then>
+                <exception><string>País no identificado en documento. <string.nl/><m_msg_id_factura/></string></exception>
+            </then>
+        </if>
+-->
+        <!-- ======================================================================= -->
+        <!-- Customización.                                                          -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- FacturasAgrupadas                                                       -->
+        <!-- NO SOPORTADO: Informar mediante customización.                          -->
+        <!-- ======================================================================= -->
+        <set name='str_facturasagrupadas'><string/></set>
+        <include code='es_sii_mr_lrfr' name='before' />
+
+        <!-- ======================================================================= -->
+        <!-- Comprueba desglose facturas agrupadas si el tipo de factura es F3:      -->
+        <!--     F3 Factura emitida en sustitución de facturas simplificadas facturadas y declaradas -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <eq><p_tipofactura/><string>F3</string></eq>
+            </expr>
+            <then>
+                <if>
+                    <expr>
+                        <isnull><str_facturasagrupadas/></isnull>
+                    </expr>
+                    <then>
+                        <exception><string>Está declarando una factura emitida en sustitución de facturas simplificadas facturadas y declaradas. Tipo de factura [<p_tipofactura/>] . <string.nl/>Debe informar desglose de facturas agrupadas (FacturasAgrupadas). <string.nl/><m_msg_id_factura/></string></exception>
+                   </then>
+                </if>
+           </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Especificación del tipo de factura a dar de alta  { L2 TipoFactura }    -->
+        <!--                                                                         -->
+        <!-- Etiqueta: TipoFactura                                                   -->
+        <!--                                                                         -->
+        <!-- SII    17-05-2017    Versión 0.7                                        -->
+        <!--                                                                         -->
+        <!-- Tipos de facturas emitidas                                              -->
+        <!-- ==========================                                              -->
+        <!-- L2 FE  F1  Factura                                                      -->
+        <!-- L2 FE  F2  Simplificada (ticket)                                        -->
+        <!-- L2 FE  F3  Sustitución de facturas simplificadas declaradas             -->
+        <!-- L2 FE  F4  Asiento resumen de facturas                                  -->
+        <!-- L2 FE  R1  Rectificativa (Error fundado y Art. 80 Uno Dos y Seis LIVA)  -->
+        <!-- L2 FE  R2  Rectificativa (Art 80.3)                                     -->
+        <!-- L2 FE  R3  Rectificativa (Art 80.4)                                     -->
+        <!-- L2 FE  R4  Rectificativa (Resto)                                        -->
+        <!-- L2 FE  R5  Rectificativa en facturas simplificadas                      -->
+        <!--                                                                         -->
+        <!-- Tipos de facturas recibidas                                             -->
+        <!-- ===========================                                             -->
+        <!-- L2 FR  F1  Factura                                                      -->
+        <!-- L2 FR  F2  Simplificada (ticket)                                        -->
+        <!-- L2 FR  F3  Sustitución de facturas simplificadas declaradas (opcional)  -->
+        <!-- L2 FR  F4  Asiento resumen de facturas                                  -->
+        <!-- L2 FR  F5  Importaciones (DUA)                                          -->
+        <!-- L2 FR  F6  Justificantes contables                                      -->
+        <!-- L2 FR  R1  Rectificativa (Error fundado y Art.80.1,2,6 LIVA) (opcional) -->
+        <!-- L2 FR  R2  Rectificativa (Art 80.3) (opcional)                          -->
+        <!-- L2 FR  R3  Rectificativa (Art 80.4) (opcional)                          -->
+        <!-- L2 FR  R4  Rectificativa (Resto) (opcional)                             -->
+        <!-- L2 FR  R5  Rectificativa simplificada (opcional)                        -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Comprueba el último número de factura en Asiento resumen de facturas.   -->
+        <!-- ======================================================================= -->
+        <set name='str_numseriefacturaemisorresumenfin'><string/></set>
+        <if>
+            <expr>
+                <eq><p_tipofactura/><string>F4</string></eq>
+            </expr>
+            <then>
+                <if>
+                    <expr>
+                        <isnull><cimpcont_head_aux_last_numfactura/></isnull>
+                    </expr>
+                    <then>
+                        <set name='cimpcont_head_aux_last_numfactura'><p_numfactura/></set>
+<!-- Si la factura es de tipo F4 y no se ha informado el último número de factura tomaremos el primer número.
+     Con tipo de factura F4 se declaran los resúmenes de facturación de los cierres de TPV de las empresas de retail.
+                        <exception><string>Está declarando un Asiento resumen de facturas [<p_tipofactura/>]. <string.nl/>Debe informar el último número de factura. <string.nl/><m_msg_id_factura/></string></exception>
+-->
+                   </then>
+                </if>
+                <!-- NumSerieFacturaEmisorResumenFin -->
+                <set name='str_numseriefacturaemisorresumenfin'><xml.sii:NumSerieFacturaEmisorResumenFin><cimpcont_head_aux_last_numfactura/></xml.sii:NumSerieFacturaEmisorResumenFin></set>
+           </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Cursor cimpcont para desglose IVA                                       -->
+        <!-- ======================================================================= -->
+        <set name='m_count_desglose'>0</set>
+        <set name='str_inversionsujetopasivo'><string/></set>
+        <set name='str_desgloseiva'><string/></set>
+        <set name='str_desglosefactura'><string/></set>
+        <set name='m_cuotadeducible'>0</set>
+        <foreach>
+            <select prefix='cimpcont_'>
+                <columns>
+                    <!-- InversionSujetoPasivo -->
+                    CASE WHEN coperimp.opautr IS NOT NULL THEN 1 ELSE 0 END AS is_isp,
+                    cimpcont.*,
+                    ctipoimp.nomimp,
+                    ctipoimp.impaut,
+                    coperimp.opautr,
+                    ctercero.requiv,
+                    es_sii_get_is_eur ( cimpcont.zimter ) AS is_eur
+                </columns>
+                <from table='${m_cimpcont_access}' alias='cimpcont'>
+                    <join type='left' table='coperimp'>
+                        <on>cimpcont.opeimp = coperimp.opeimp</on>
+                    </join>
+                    <join type='left' table='ctipoimp'>
+                        <on>cimpcont.codimp = ctipoimp.codimp</on>
+                        <on>cimpcont.fecope BETWEEN ctipoimp.fecini AND ctipoimp.fecfin</on>
+                    </join>
+                    <join type='left' table='ctercero'>
+                        <on>cimpcont.tercer = ctercero.codigo</on>
+                    </join>
+                </from>
+                <where>
+                        cimpcont.empcode  = <p_empcode/>
+                    AND cimpcont.natfac   = <m_natfac/>
+                    AND cimpcont.docser   = <p_numfactura/>
+                    AND cimpcont.cif      = <cimpcont_head_cif/>
+                    AND cimpcont.fecdoc   = <p_fechafactura/>
+                    AND cimpcont.tipimp   = 'N'
+<!--                AND cimpcont.valida  != 'R'      Excluye registros: Cobros y/o pagos RECC o  Cobros y/o pagos de certificaciones de obras -->
+                    <!-- Excluye registros Post-validados de Cobros y/o pagos RECC  -->
+                    AND NOT(cimpcont.valida  = 'R' AND cimpcont.cashvat = 1)
+                    <!-- Excluye registros No validados de certificaciones de obras -->
+                    AND NOT(cimpcont.valida  = 'N' AND cimpcont.cashvat = 0)
+                    <!-- Excluimos los registros generados por el proceso de autofacturas (ISP): -->
+                    AND cimpcont.docgen  != 'R'
+                    <!-- Excluimos los registros generados por el proceso de autofacturas (ISP): -->
+                    AND cimpcont.docgen  != 'R'
+					<!-- CURSACH: Excluimos Operaciones CNX, TND, NSJ para Gastos Suplidos                           -->
+					AND cimpcont.opeimp NOT IN ('CNX','TND', 'NSJ')
+					
+                </where>
+                <order>
+                    is_isp, cimpcont.imppor, cimpcont.orden
+                </order>
+            </select>
+            <before-group of='cimpcont_is_isp'>
+                <!-- ======================================================================= -->
+                <!-- Inicializaciones                                                        -->
+                <!-- ======================================================================= -->
+                <set name='str_detalleiva'><string/></set>
+                <set name='m_detalleiva_regs'>0</set>
+            </before-group>
+            <after-group of='cimpcont_is_isp'>
+<!-- Ejemplo:
+               <sum1:DesgloseFactura>
+                  Optional:
+                  <sum1:InversionSujetoPasivo>
+                     1 to 6 repetitions:
+                     <sum1:DetalleIVA>
+                        <sum1:TipoImpositivo>?</sum1:TipoImpositivo>
+                        <sum1:BaseImponible>?</sum1:BaseImponible>
+                        <sum1:CuotaSoportada>?</sum1:CuotaSoportada>
+                        Optional:
+                        <sum1:TipoRecargoEquivalencia>?</sum1:TipoRecargoEquivalencia>
+                        Optional:
+                        <sum1:CuotaRecargoEquivalencia>?</sum1:CuotaRecargoEquivalencia>
+                     </sum1:DetalleIVA>
+                  </sum1:InversionSujetoPasivo>
+                  Optional:
+                  <sum1:DesgloseIVA>
+                     1 to 6 repetitions:
+                     <sum1:DetalleIVA>
+                        Optional:
+                        <sum1:TipoImpositivo>?</sum1:TipoImpositivo>
+                        <sum1:BaseImponible>?</sum1:BaseImponible>
+                        Optional:
+                        <sum1:CuotaSoportada>?</sum1:CuotaSoportada>
+                        Optional:
+                        <sum1:TipoRecargoEquivalencia>?</sum1:TipoRecargoEquivalencia>
+                        Optional:
+                        <sum1:CuotaRecargoEquivalencia>?</sum1:CuotaRecargoEquivalencia>
+                        Optional:
+                        <sum1:PorcentCompensacionREAGYP>?</sum1:PorcentCompensacionREAGYP>
+                        Optional:
+                        <sum1:ImporteCompensacionREAGYP>?</sum1:ImporteCompensacionREAGYP>
+                     </sum1:DetalleIVA>
+                  </sum1:DesgloseIVA>
+               </sum1:DesgloseFactura>
+-->
+                <!-- ======================================================================= -->
+                <!-- DesgloseFactura                                                         -->
+                <!--     InversionSujetoPasivo                                               -->
+                <!--     DesgloseIVA                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><string.length><str_detalleiva/></string.length>0</eq>
+                    </expr>
+                    <then>
+                        <exception><string>No se ha informado detalle del IVA [DetalleIVA]. <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+                <!--
+                    4.3. ¿Cómo se registra una operación con inversión del sujeto pasivo (art. 84.Uno.2º y 4º de la Ley del IVA) siempre que tengan su origen en operaciones distintas a las adquisiciones intracomunitarias de bienes y servicios)?
+
+                        El destinatario de la operación registrará los datos de la factura recibida consignando el campo “Inversión Sujeto Pasivo”. Deberá calcular y consignar la cuota soportada correspondiente a dicha factura así como cumplimentar el campo “Cuota Deducible”. No registrará dato alguno en el Libro Registro de Facturas Expedidas.
+
+                    4.4. ¿Cómo se registran las Adquisiciones Intracomunitarias de Bienes y Servicios?
+
+                        Se anotará la factura recibida del proveedor comunitario en el Libro registro de Facturas Recibidas procediendo a su identificación mediante la clave 2 en el campo de tipos de Identificación en el país de residencia “IDType” y su Número de Operador Intracomunitario en el campo "ID". El campo “Código País” no será obligatorio.
+                        En el campo “Clave Régimen especial o Trascendencia” se consignará el valor 09. Por otra parte, se deberá calcular y consignar la cuota soportada correspondiente a la citada factura así como cumplimentar el campo “Cuota Deducible”.
+
+                        En estos casos no se debe informar con el campo “Inversión Sujeto Pasivo” que sólo se utiliza cuando el declarante sea sujeto pasivo del Impuesto de acuerdo con lo dispuesto en los artículos 84.Uno.2º y 4º de la Ley del IVA siempre que tengan su origen en operaciones distintas a las adquisiciones intracomunitarias de bienes y servicios.
+
+                        No se registrará dato alguno en el Libro Registro de Facturas Expedidas.
+
+                        Tipo de operación: L3 FR  09  Adquisiciones intracomunitarias de bienes y prest.servicios
+
+                    4.5. ¿Cómo se registra una Importación?
+
+                        La operación se anota en el Libro Registro de Facturas Recibidas con la clave tipo de factura “F5”. Deberán consignarse, como número de factura y fecha de expedición, el número de referencia que figura en el propio DUA y la fecha de su admisión por la Administración Aduanera respectivamente.
+
+                        Por otra parte, se deberá consignar el detalle de la factura (tipo, base imponible y cuota soportada) así como cumplimentar el campo “Cuota Deducible”.
+
+                        Tipo de factura: L2 FR  F5  Importaciones (DUA)
+
+                        En los datos identificativos correspondientes al proveedor se consignaran los del importador y titular del libro registro.
+
+                        En el suministro de los datos correspondientes a las importaciones se deben tener en cuenta las siguientes precisiones:
+
+                            - Como “Base Imponible” se indicará el Valor en Aduana de la mercancía, más los demás gravámenes que se devenguen fuera del territorio de aplicación, más los gravámenes a la importación y más los gastos accesorios que no formen parte del Valor en Aduana y que se produzcan hasta el primer lugar de destino en el interior de la comunidad (Base Imponible, casilla 47 DUA).
+
+                            - Como “Cuota Tributaria” se consignará el importe a pagar.
+
+                        Los gastos posteriores a la admisión del DUA no incluidos en la base imponible del IVA a la importación darán lugar al registro de facturas separadas. De la factura del transitario, sólo se registrará la parte que corresponda a la prestación de su servicio (no la cuantía del IVA a la importación que se le exige al cliente en concepto de suplido).
+
+                        Habiendo registrado un DUA no es necesario registrar la factura del proveedor extranjero salvo que se hubiera recibido con antelación. En el caso de remitir los datos de dicha factura se consignará como clave de tipo de factura "F6" y “clave de régimen especial” en el Libro Registro de facturas recibidas la clave 13 “Factura correspondiente a una importación (informada sin asociar a un DUA)”. En estos casos el registro de la misma implicará que no se consignen los campos correspondientes a la cuota de IVA.
+
+                        Ejemplos ../..
+                -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><m_is_isp/>1</eq>
+                            <not><m_is_eur/></not>
+<!--                        <ne><cimpcont_zimter/>EUR</ne> -->
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='str_inversionsujetopasivo'>
+                            <xml.sii:InversionSujetoPasivo>
+                                <str_detalleiva/>
+                            </xml.sii:InversionSujetoPasivo>
+                        </set>
+                    </then>
+                    <else>
+                        <set name='str_desgloseiva'>
+                            <xml.sii:DesgloseIVA>
+                                <str_detalleiva/>
+                            </xml.sii:DesgloseIVA>
+                        </set>
+                    </else>
+                </if>
+            </after-group>
+            <do>
+
+                <!-- ======================================================================= -->
+                <!-- Control límite desglose                                                 -->
+                <!-- ======================================================================= -->
+                <set name='m_count_desglose'><add><m_count_desglose/><number>1</number></add></set>
+                <set name='m_is_isp'><cimpcont_is_isp/></set>
+                <set name='m_is_eur'><cimpcont_is_eur/></set>
+                <set name='ctipoimp_nomimp'><cimpcont_nomimp/></set>
+                <set name='ctipoimp_impaut'><cimpcont_impaut/></set>
+                <set name='coperimp_opautr'><cimpcont_opautr/></set>
+                <set name='ctercero_requiv'><cimpcont_requiv/></set>
+                <unset name='cimpcont_is_isp'/>
+                <unset name='cimpcont_is_eur'/>
+                <unset name='cimpcont_nomimp'/>
+                <unset name='cimpcont_impaut'/>
+                <unset name='cimpcont_opautr'/>
+                <unset name='cimpcont_requiv'/>
+
+                <!-- ======================================================================= -->
+                <!-- ISP Inversión del Sujeo Pasivo ( Intracomunitarias, etc. )              -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_is_isp/>1</eq>
+                    </expr>
+                    <then>
+                        <if>
+                            <expr>
+                                <eq><string.length><ctipoimp_impaut/></string.length>0</eq>
+                            </expr>
+                            <then>
+                                <exception><string>Se trata de una operación con inversión del sujeto pasivo (ISP) o intracomunitaria y no tiene informada la sustitución del tipo impositivo en [ctipoimp.impaut]. <string.nl/><m_msg_id_factura/></string></exception>
+                            </then>
+                        </if>
+                        <if>
+                            <expr>
+                                <ne><cimpcont_totimp/>0</ne>
+                            </expr>
+                            <then>
+                                <exception><string>Se trata de una operación con inversión del sujeto pasivo (ISP) o intracomunitaria y tiene informado el importe de la cuota del impuesto con un valor distinto de cero. <string.nl/><m_msg_id_factura/></string></exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- ISP Inversión del Sujeo Pasivo o Intracomunitarias                      -->
+                        <!-- ======================================================================= -->
+                        <select prefix='isp_ctipoimp_' required='Operación ISP - Registro no encontrado. [${ctipoimp_impaut}] / [${cimpcont_fecope}] '>
+                            <columns>
+                                ctipoimp.codimp,
+                                ctipoimp.nomimp,
+                                ctipoimp.imppor,
+                                ctipoimp.recpor
+                            </columns>
+                            <from table='ctipoimp' />
+                            <where>
+                                    ctipoimp.codimp    = <ctipoimp_impaut/>
+                                AND <cimpcont_fecope/> BETWEEN ctipoimp.fecini AND ctipoimp.fecfin
+                            </where>
+                        </select>
+                        <set name='cimpcont_codimp'><isp_ctipoimp_codimp/></set>
+                        <set name='ctipoimp_nomimp'><isp_ctipoimp_nomimp/></set>
+                        <set name='cimpcont_imppor'><isp_ctipoimp_imppor/></set>
+                        <unset name='isp_ctipoimp_codimp'/>
+                        <unset name='isp_ctipoimp_nomimp'/>
+                        <unset name='isp_ctipoimp_imppor'/>
+
+                        <!-- ======================================================================= -->
+                        <!-- Calcula la cuota del impuesto.                                          -->
+                        <!-- ======================================================================= -->
+                        <set name='cimpcont_totimp'>
+                            <math.round>
+                                <div>
+                                    <mul><cimpcont_basimp/><cimpcont_imppor/></mul>
+                                    <number>100</number>
+                                </div>
+                                <number>2</number>
+                            </math.round>
+                        </set>
+
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- CTIPOIMP_NOMIMP                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><string.length><ctipoimp_nomimp/></string.length>0</eq>
+                    </expr>
+                    <then>
+                        <exception><string>No se ha informado la descripción [ctipoimp_nomimp] del tipo impositivo [<cimpcont_codimp/>]. <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Obtiene o cálcula la cuota del recargo de equivalencia                  -->
+                <!-- ======================================================================= -->
+                <set name='m_porrec'>0</set>
+                <set name='m_totrec'>0</set>
+                <if>
+                    <expr>
+                        <eq><m_is_isp/>0</eq>
+                    </expr>
+                    <then>
+                        <select prefix='m_'>
+                            <columns>
+                                MIN(cimpcont.imppor) AS porrec,
+                                SUM(cimpcont.totimp) AS totrec
+                            </columns>
+                            <from table='${m_cimpcont_access}' alias='cimpcont' />
+                            <where>
+                                    cimpcont.empcode  = <p_empcode/>
+                                AND cimpcont.natfac   = <m_natfac/>
+                                AND cimpcont.docser   = <p_numfactura/>
+                                AND cimpcont.cif      = <cimpcont_cif/>
+                                AND cimpcont.fecdoc   = <p_fechafactura/>
+                                AND cimpcont.tipimp   = 'E'
+<!--                            AND cimpcont.valida  != 'R'      Excluye registros: Cobros y/o pagos RECC o  Cobros y/o pagos de certificaciones de obras -->
+                                <!-- Excluye registros Post-validados de Cobros y/o pagos RECC  -->
+                                AND NOT(cimpcont.valida  = 'R' AND cimpcont.cashvat = 1)
+                                <!-- Excluye registros No validados de certificaciones de obras -->
+                                AND NOT(cimpcont.valida  = 'N' AND cimpcont.cashvat = 0)
+                                <!-- Excluimos los registros generados por el proceso de autofacturas (ISP): -->
+                                AND cimpcont.docgen  != 'R'
+                                AND cimpcont.apteid   = <cimpcont_apteid/>
+                                AND cimpcont.fecha    = <cimpcont_fecha/>
+                                AND cimpcont.tercer   = <cimpcont_tercer/>
+                                AND cimpcont.tipdir   = <cimpcont_tipdir/>
+                                AND cimpcont.codimp   = <cimpcont_codimp/>
+                            </where>
+                        </select>
+                        <if>
+                            <expr>
+                                <isnull><m_porrec/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_porrec'>0</set>
+                                <set name='m_totrec'>0</set>
+                            </then>
+                        </if>
+                    </then>
+                    <!-- If is_isp = 1 -->
+                    <else>
+                        <if>
+                            <expr>
+                                <isnotnull><ctercero_requiv/></isnotnull>
+                            </expr>
+                            <then>
+                                <set name='m_porrec'><isp_ctipoimp_recpor/></set>
+                                <set name='m_totrec'>
+                                    <math.round>
+                                        <div>
+                                            <mul><cimpcont_basimp/><m_porrec/></mul>
+                                            <number>100</number>
+                                        </div>
+                                        <number>2</number>
+                                    </math.round>
+                                </set>
+                            </then>
+                        </if>
+                    </else>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Total cuota deducible                                                   -->
+                <!-- ======================================================================= -->
+                <set name='m_cuotadeducible'>
+                    <add>
+                        <m_cuotadeducible/>
+                        <math.round>
+                            <div>
+                                <mul>
+                                    <add><cimpcont_totimp/><m_totrec/></add>    <!-- IVA + Recargo de equivalencia -->
+                                    <cimpcont_porpro/>
+                                </mul>
+                                <number>100</number>
+                            </div>
+                            <number>2</number>
+                        </math.round>
+                    </add>
+                </set>
+<!-- fcm Error. Si R1 i tenim prorrata = 0% calculem m_cuotadeducible = 0 i la AEAT ens genera error 2020:
+
+        Error: 2020
+        El campo CuotaDeducible tiene un valor incorrecto para el valor de los campos CuotaSoportada e ImporteCompensacionREAGYP suministrados
+
+    per evitar l'error hem d'informar un valor igual a la cuota supotada !
+
+    TEST MT - Empresa: 14  Númeopr fra: 20161689  Data: 09-01-2017  Cuota soportada: -2094.91   ;  Cuota deduvicble: 0
+              head_seqno = 6465
+
+<set name='m_cuotadeducible'>-2094.91</set>
+-->
+
+                <!-- ======================================================================= -->
+                <!-- Customización.                                                          -->
+                <!-- ======================================================================= -->
+                <include code='es_sii_mr_lrfr' name='detalleiva' />
+
+                <!-- ======================================================================= -->
+                <!-- sii:BaseImponibleACoste                                                 -->
+                <!--     Para grupos de IVA                                                  -->
+                <!--                                                                         -->
+                <!-- ClaveRegimenEspecialOTrascendencia   (Emitidas y Recibidas)             -->
+                <!--                                                                         -->
+                <!-- L3 FE  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+                <!-- L3 FR  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><p_claveoperacion/><string>06</string></eq>
+                            <isnotnull><cempresa_grpent/></isnotnull>
+                            <eq><cimpcont_imppor/>0</eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Acumula la base imponible a coste.                                      -->
+                        <!-- ======================================================================= -->
+                        <set name='m_baseimponibleacoste'><add><m_baseimponibleacoste/><cimpcont_basimp/></add></set>
+<!-- fcm - No saltamos con foreach.continue simil en facturas emitidas.
+                        <foreach.continue/>
+-->
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- str_recargoequivalencia                                                 -->
+                <!-- ======================================================================= -->
+                <set name='str_recargoequivalencia'><string/></set>
+                <if>
+                    <expr>
+                        <ne><m_porrec/>0</ne>
+                    </expr>
+                    <then>
+                        <set name='str_recargoequivalencia'>
+                            <add>
+                                <string.nl/>
+                                <xml.sii:TipoRecargoEquivalencia><m_porrec/></xml.sii:TipoRecargoEquivalencia>
+                                <xml.sii:CuotaRecargoEquivalencia><m_totrec/></xml.sii:CuotaRecargoEquivalencia>
+                            </add>
+                        </set>
+                    </then>
+                </if>
+
+                <!-- El valor de cimpcont_imppor en la base de datos es de tres decimales, lo reducimos a dos y convertimos a punto. -->
+                <set name='m_str_imppor'><number.format format='#.##' minimumfractiondigits='2' maximumfractiondigits='2'><cimpcont_imppor/></number.format></set>
+                <set name='m_str_imppor'><string.replace><m_str_imppor/><string>,</string><string>.</string></string.replace></set>
+                <set name='str_detalleiva'>
+                    <add>
+                        <str_detalleiva/>
+                        <xml.sii:DetalleIVA>
+                            <xml.sii:TipoImpositivo><m_str_imppor/></xml.sii:TipoImpositivo>
+                            <xml.sii:BaseImponible><cimpcont_basimp/></xml.sii:BaseImponible>
+                            <xml.sii:CuotaSoportada><cimpcont_totimp/></xml.sii:CuotaSoportada><str_recargoequivalencia/>
+                        </xml.sii:DetalleIVA>
+                    </add>
+                </set>
+                <set name='m_detalleiva_regs'><add><m_detalleiva_regs/><number>1</number></add></set>
+                <!-- ======================================================================= -->
+                <!-- Control máximo número de bloques de IVA                                 -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <gt><m_detalleiva_regs/>6</gt>
+                    </expr>
+                    <then>
+                        <exception><string>Se ha excedido el número de seis bloques de la etiqueta [DetalleIVA]. <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+            </do>
+        </foreach>
+
+        <!-- ======================================================================= -->
+        <!-- Control desglose                                                        -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <eq><m_count_desglose/><number>0</number></eq>
+            </expr>
+            <then>
+                <exception><string>No se ha encontrado ningún registro de detalle. <string.nl/><m_msg_id_factura/></string></exception>
+            </then>
+        </if>
+        <if>
+            <expr>
+                <eq><p_importetotal/><number>0</number></eq>
+            </expr>
+            <then>
+                <exception><string>Importe total de factura igual a cero. <string.nl/><m_msg_id_factura/></string></exception>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- TipoDesglose                                                            -->
+        <!--     DesgloseFactura                                                     -->
+        <!--     o                                                                   -->
+        <!--     DesgloseTipoOperacion                                               -->
+        <!--         PrestacionServicios                                             -->
+        <!--         Entrega                                                         -->
+        <!-- ======================================================================= -->
+        <set name='str_desglosefactura'>
+            <xml.sii:DesgloseFactura>
+                <str_inversionsujetopasivo/>
+                <str_desgloseiva/>
+            </xml.sii:DesgloseFactura>
+        </set>
+
+        <!-- ======================================================================= -->
+        <!-- siiLR:RegistroLRFacturasRecibidas                                       -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- siiLR:IDFactura                                                         -->
+        <!-- ======================================================================= -->
+        <set name='str_idfactura'>
+            <xml.siiLR:IDFactura>
+                <xml.sii:IDEmisorFactura>
+                    <m_idemisorfactura_nif/><m_idemisorfactura_idotro/>
+                </xml.sii:IDEmisorFactura>
+                <xml.sii:NumSerieFacturaEmisor><p_numfactura/></xml.sii:NumSerieFacturaEmisor><str_numseriefacturaemisorresumenfin/>
+                <xml.sii:FechaExpedicionFacturaEmisor><date.format format='dd-MM-yyyy'><p_fechafactura/></date.format></xml.sii:FechaExpedicionFacturaEmisor>
+            </xml.siiLR:IDFactura>
+        </set>
+
+        <!-- ======================================================================= -->
+        <!-- L5 Tipo de Factura Rectificativa                                        -->
+        <!--     S Por sustitución                                                   -->
+        <!--     I Por diferencias (cas normal)                                      -->
+        <!-- ======================================================================= -->
+        <set name='str_tiporectificativa'><string/></set>
+        <set name='str_facturasrectificadas'><string/></set>
+        <if>
+            <expr>
+                <or>
+                    <lt><p_importetotal/><number>0</number></lt>
+                    <isnotnull><cimpcont_docrec/></isnotnull>
+                    <isnotnull><cimpcont_fecrec/></isnotnull>
+                </or>
+            </expr>
+            <then>
+                <!-- Una factura negativa sin información de la factura rectificada puede ser -->
+                <!-- de tipo factura F1 , en tal caso no puede informarse TipoRectificativa   -->
+                <if>
+                    <expr>
+                        <string.regexp><p_tipofactura/><string>R.*</string></string.regexp>
+                    </expr>
+                    <then>
+                        <!-- Rectificativa por diferencias -->
+                        <set name='str_tiporectificativa'><xml.sii:TipoRectificativa>I</xml.sii:TipoRectificativa></set>
+                    </then>
+                </if>
+<!--
+<sii:TipoFactura>R2</sii:TipoFactura>
+<sii:TipoRectificativa>I</sii:TipoRectificativa>
+<sii:FacturasRectificadas>
+<sii:IDFacturaRectificada>
+<sii:NumSerieFacturaEmisor>00000000000000000000000500002000000000000000000000000000014</sii:NumSerieFacturaEmisor>
+<sii:FechaExpedicionFacturaEmisor>01-03-2015</sii:FechaExpedicionFacturaEmisor>
+</sii:IDFacturaRectificada>
+</sii:FacturasRectificadas>
+<sii:ClaveRegimenEspecialOTrascendencia>05</sii:ClaveRegimenEspecialOTrascendencia>
+-->
+                <!-- ======================================================================= -->
+                <!-- En la versión SII 0.7 las facturas rectificativas R* pueden no informar -->
+                <!-- la fecha y documento de la rectificada pero si se informan deben        -->
+                <!-- informarse ambas dos.                                                   -->
+                <!-- ======================================================================= -->
+
+                <if>
+                    <expr>
+                        <and>
+                            <isnotnull><cimpcont_docrec/></isnotnull>
+                            <isnotnull><cimpcont_fecrec/></isnotnull>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='str_id_rect_numseriefacturaemisor'><string/></set>
+                        <if>
+                            <expr>
+                                <isnotnull><cimpcont_docrec/></isnotnull>
+                            </expr>
+                            <then>
+                                <set name='str_id_rect_numseriefacturaemisor'><xml.sii:NumSerieFacturaEmisor><cimpcont_docrec/></xml.sii:NumSerieFacturaEmisor></set>
+                            </then>
+                        </if>
+                        <set name='str_id_rect_fechaexpedicionfacturaemisor'><string/></set>
+                        <if>
+                            <expr>
+                                <isnotnull><cimpcont_fecrec/></isnotnull>
+                            </expr>
+                            <then>
+                                <set name='str_id_rect_fechaexpedicionfacturaemisor'><xml.sii:FechaExpedicionFacturaEmisor><cimpcont_fecrec/></xml.sii:FechaExpedicionFacturaEmisor></set>
+                            </then>
+                        </if>
+
+						
+						
+                        <set name='str_facturasrectificadas'>
+                            <xml.sii:FacturasRectificadas>
+                                <xml.sii:IDFacturaRectificada>
+                                    <str_id_rect_numseriefacturaemisor/>
+                                    <str_id_rect_fechaexpedicionfacturaemisor/>
+                                </xml.sii:IDFacturaRectificada>
+                            </xml.sii:FacturasRectificadas>
+                        </set>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- FechaOperacion                                                          -->
+        <!-- ======================================================================= -->
+        <set name='str_fechaoperacion'><string/></set>
+        <if>
+            <expr>
+                <ne><cimpcont_fecope/><p_fechafactura/></ne>
+            </expr>
+            <then>
+                <set name='str_fechaoperacion'><xml.sii:FechaOperacion><date.format format='dd-MM-yyyy'><cimpcont_fecope/></date.format></xml.sii:FechaOperacion></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Claves que identificarán las claves de régimen especial o               -->
+        <!-- transcendencia tributaria.                                              -->
+        <!--                                                                         -->
+        <!-- Etiquetas:                                                              -->
+        <!--     ClaveRegimenEspecialOTrascendencia                                  -->
+        <!--     ClaveRegimenEspecialOTrascendenciaAdicional1                        -->
+        <!--     ClaveRegimenEspecialOTrascendenciaAdicional2                        -->
+        <!--                                                                         -->
+        <!-- SII    17-05-2017    Versión 0.7                                        -->
+        <!--                                                                         -->
+        <!-- Tipos de operaciones para facturas emitidas                             -->
+        <!-- ===========================================                             -->
+        <!-- L3 FE  01  Operación de régimen general                                 -->
+        <!-- L3 FE  02  Exportación                                                  -->
+        <!-- L3 FE  03  Régimen especial de bienes usados, objetos de arte           -->
+        <!-- L3 FE  04  Régimen especial del oro de inversión                        -->
+        <!-- L3 FE  05  Régimen especial de las agencias de viajes                   -->
+        <!-- L3 FE  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!-- L3 FE  07  Régimen especial del criterio de caja                        -->
+        <!-- L3 FE  08  Operaciones sujetas al IPSI / IGIC                           -->
+        <!-- L3 FE  09  Facturación prestaciones de servicios agencias de viaje      -->
+        <!-- L3 FE  10  Cobros por cuenta de terceros de honorarios profesionales... -->
+        <!-- L3 FE  11  Arrendamiento local de negocio sujetas a retención           -->
+        <!-- L3 FE  12  Arrendamiento local de negocio no sujetas a retención        -->
+        <!-- L3 FE  13  Arrendamiento de local de negocio sujetas y no sujetas a ret -->
+        <!-- L3 FE  14  Factura con IVA no devengado en certificaciones de obra AAPP -->
+        <!-- L3 FE  15  Factura con IVA pendiente de devengo en op. tracto sucesivo  -->
+        <!-- L3 FE  16  Primer semestre 2017                                         -->
+        <!--                                                                         -->
+        <!-- Tipos de operaciones para facturas recibidas                            -->
+        <!-- ============================================                            -->
+        <!-- L3 FR  01  Operación de régimen general                                 -->
+        <!-- L3 FR  02  Compensaciones a personas acogidas al REAGYP                 -->
+        <!-- L3 FR  03  Régimen especial de bienes usados, objetos de arte           -->
+        <!-- L3 FR  04  Régimen especial del oro de inversión                        -->
+        <!-- L3 FR  05  Régimen especial de las agencias de viajes                   -->
+        <!-- L3 FR  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!-- L3 FR  07  Régimen especial del criterio de caja                        -->
+        <!-- L3 FR  08  Operaciones sujetas al IPSI / IGIC                           -->
+        <!-- L3 FR  09  Adquisiciones intracomunitarias de bienes y prest.servicios  -->
+        <!-- L3 FR  12  Operaciones de arrendamiento de local de negocio             -->
+        <!-- L3 FR  13  Factura correspondiente a una importación (sin DUA)          -->
+        <!-- L3 FR  14  Primer semestre 2017                                         -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- L3 FE  07  Régimen especial criterio de caja                            -->
+        <!--     *** NO SOPORTADA LA COMUNIACIÓN DE LOS COBROS ***                   -->
+        <!-- ======================================================================= -->
+<!--
+        <if>
+            <expr>
+                <eq><cimpcont_cashvat/>1</eq>
+            </expr>
+            <then>
+                <if>
+                    <expr>
+                        <ne><p_claveoperacion/><string>07</string></ne>
+                    </expr>
+                    <then>
+                        <exception><string>Operación RECC. Error clave de operación [<p_claveoperacion/>] en documento. <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+            </then>
+        </if>
+-->
+
+        <!-- ======================================================================= -->
+        <!-- IPSI / IGIC Facturas emitidas y facturas recibidasa                     -->
+        <!-- L3 FE  08  Operaciones sujetas al IPSI / IGIC                           -->
+        <!-- L3 FR  08  Operaciones sujetas al IPSI / IGIC                           -->
+        <!-- ======================================================================= -->
+<!-- fcm 19-06-2017		
+        <if>
+            <expr>
+                <string.regexp><cimpcont_zimter/><string>(ESIC|CAN)</string></string.regexp>
+            </expr>
+            <then>
+                <if>
+                    <expr>
+                        <ne><p_claveoperacion/><string>08</string></ne>
+                    </expr>
+                    <then>
+                        <exception><string>Error clave de operación [<p_claveoperacion/>] en operación sujeta al IPSI / IGIC. <string.nl/><m_msg_id_factura/></string></exception>
+                    </then>
+                </if>
+            </then>
+        </if>
+-->
+        <!-- ======================================================================= -->
+        <!-- CONTRAPARTE_NOMBRERAZON                                                 -->
+        <!-- ======================================================================= -->
+
+		<select prefix='m_'>
+			<columns>COUNT(*) contar</columns>
+			<from table='ctercero'/>
+			<where>cif = <cimpcont_cif/></where>
+		</select>		
+		
+		<if>
+			<expr>
+				<eq><m_contar/>1</eq>
+			</expr>
+			<then>
+
+				<select prefix='m_'>
+					<columns>nombre</columns>
+					<from table='ctercero'/>
+					<where>cif = <cimpcont_cif/></where>
+				</select>	
+				<if>
+					<expr>
+						<isnotnull><m_nombre/></isnotnull>
+					</expr>
+					<then>
+						<set name='cimpcont_nombre'><m_nombre/></set>
+					</then>
+				</if>
+					
+			</then>
+		</if>				
+		
+        <set name='m_contraparte_nombrerazon'><local_str_fixlen><cimpcont_nombre/><number>120</number></local_str_fixlen></set>
+
+        <!-- ======================================================================= -->
+        <!-- sii:BaseImponibleACoste                                                 -->
+        <!--     Para grupos de IVA                                                  -->
+        <!-- ClaveRegimenEspecialOTrascendencia   (Emitidas y Recibidas)             -->
+        <!--                                                                         -->
+        <!-- L3 FE  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!-- L3 FR  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+        <!-- ======================================================================= -->
+        <set name='str_baseimponibleacoste'><string/></set>
+        <if>
+            <expr>
+                <ne><m_baseimponibleacoste/>0</ne>
+            </expr>
+            <then>
+                <set name='str_baseimponibleacoste'><xml.sii:BaseImponibleACoste><m_baseimponibleacoste/></xml.sii:BaseImponibleACoste></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- DescripcionOperacion                                                    -->
+        <!-- ======================================================================= -->
+        <set name='str_desc_operacion'><string/></set>
+        <if>
+            <expr>
+                <isnotnull><p_descoperacion/></isnotnull>
+            </expr>
+            <then>
+                <set name='str_desc_operacion'>
+                    <xml.sii:DescripcionOperacion><p_descoperacion/></xml.sii:DescripcionOperacion>
+                </set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- ClaveRegimenEspecialOTrascendenciaAdicional1                            -->
+        <!-- ======================================================================= -->
+        <set name='str_claveregimenespecialotrascendenciaadicional1'><string/></set>
+        <if>
+            <expr>
+                <isnotnull><p_claveoperaciona1/></isnotnull>
+            </expr>
+            <then>
+                <set name='str_claveregimenespecialotrascendenciaadicional1'><xml.sii:ClaveRegimenEspecialOTrascendenciaAdicional1><p_claveoperaciona1/></xml.sii:ClaveRegimenEspecialOTrascendenciaAdicional1></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- ClaveRegimenEspecialOTrascendenciaAdicional2                            -->
+        <!-- ======================================================================= -->
+        <set name='str_claveregimenespecialotrascendenciaadicional2'><string/></set>
+        <if>
+            <expr>
+                <isnotnull><p_claveoperaciona2/></isnotnull>
+            </expr>
+            <then>
+                <set name='str_claveregimenespecialotrascendenciaadicional2'><xml.sii:ClaveRegimenEspecialOTrascendenciaAdicional2><p_claveoperaciona2/></xml.sii:ClaveRegimenEspecialOTrascendenciaAdicional2></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Ajusta la fecha de registro contable caso de ser anterior a la fecha    -->
+        <!-- de la factura.                                                          -->
+        <!-- ======================================================================= -->
+        <set name='m_fecharegcontable' type='date'><date><cimpcont_head_fecharegcontable/></date></set>
+        <if>
+            <expr>
+                <lt><m_fecharegcontable/><p_fechafactura/></lt>
+            </expr>
+            <then>
+                <set name='m_fecharegcontable'><p_fechafactura/></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- siiLR:FacturaRecibida                                                   -->
+        <!-- ======================================================================= -->
+        <set name='str_facturarecibida'>
+            <xml.siiLR:FacturaRecibida>
+            <xml.sii:TipoFactura><p_tipofactura/></xml.sii:TipoFactura>
+            <str_tiporectificativa/>
+            <str_facturasagrupadas/>
+            <str_facturasrectificadas/>
+            <str_fechaoperacion/>
+            <xml.sii:ClaveRegimenEspecialOTrascendencia><p_claveoperacion/></xml.sii:ClaveRegimenEspecialOTrascendencia>
+            <str_claveregimenespecialotrascendenciaadicional1/><str_claveregimenespecialotrascendenciaadicional2/>
+            <xml.sii:ImporteTotal><p_importetotal/></xml.sii:ImporteTotal>
+            <str_baseimponibleacoste/>
+            <str_desc_operacion/>
+            <str_desglosefactura/>
+            <xml.sii:Contraparte>
+                <xml.sii:NombreRazon><m_contraparte_nombrerazon/></xml.sii:NombreRazon>
+                <m_contraparte_nif/><m_contraparte_idotro/>
+            </xml.sii:Contraparte>
+            <xml.sii:FechaRegContable><date.format format='dd-MM-yyyy'><m_fecharegcontable/></date.format></xml.sii:FechaRegContable>
+            <xml.sii:CuotaDeducible><m_cuotadeducible/></xml.sii:CuotaDeducible>
+            </xml.siiLR:FacturaRecibida>
+        </set>
+
+        <!-- ======================================================================= -->
+        <!-- XML una factura                                                         -->
+        <!-- ======================================================================= -->
+        <set name='m_message_one_invoice'>
+            <xml.siiLR:RegistroLRFacturasRecibidas>
+                <str_periodoimpositivo/>
+                <str_idfactura/>
+                <str_facturarecibida/>
+            </xml.siiLR:RegistroLRFacturasRecibidas>
+        </set>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <return>
+            <m_message_one_invoice/>
+        </return>
+
+    </body>
+</xsql-script>

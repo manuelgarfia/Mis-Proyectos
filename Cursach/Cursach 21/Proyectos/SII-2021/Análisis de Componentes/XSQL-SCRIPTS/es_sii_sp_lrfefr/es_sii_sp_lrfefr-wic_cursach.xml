@@ -1,0 +1,1275 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_sp_lrfefr                                                   -->
+<!--                                                                         -->
+<!-- Prepara las facturas que deben generar algún tipo de mensaje en el      -->
+<!-- sistema SII.                                                            -->
+<!--                                                                         -->
+<!--     1) Comprueba que no existan facturas ANULADAS del sistema SII en el -->
+<!--        controlador cimpcont_head.                                       -->
+<!--                                                                         -->
+<!--     2) Localiza y prepara las facturas que deben ser eliminadas,        -->
+<!--        comunicando BAJA o CANCELANDO el registro.                       -->
+<!--                                                                         -->
+<!--     2) Reenlaza los identificadores de facturas que están en tránsito   -->
+<!--        de ser modificadas.                                              -->
+<!--        Vinculará el nuevo registro en cimpcont_head con el registro     -->
+<!--        controlador en es_sii_facturas.                                  -->
+<!--                                                                         -->
+<!--     4) Añade las nuevas facturas pendientes de declarar al sistema SII. -->
+<!--                                                                         -->
+<!--
+    PROCESOS Y FUNCIONES:
+
+    Package: "es_sii_sp"     sp = Supervisor
+    ========================================
+    xsql es_sii_sp_lrfefr                   ( LRFacturasEmitidas y LRFacturasRecibidas )
+        func local_remove_verify
+        func local_remove_delete
+        func local_modify_link
+        func local_add_invoices
+
+    PENDIENTE:
+    xsql es_sii_sp_lrce                     ( LRCobrosEmitidas )
+        func local_...
+    xsql es_sii_sp_lrpr                     ( LRPagosRecibidas )
+        func local_...
+    xsql es_sii_sp_lrcm                     ( LRCobrosMetalico )
+        func local_...
+    xsql es_sii_sp_lrbi                     ( LRBienesInversion )
+        func local_...
+    etc.
+
+    Package: "es_sii_mr"     mr = Make Requests
+    ===========================================
+    xsql es_sii_mr
+        func local_es_sii_mr
+            func local_es_sii_mr_lr_cabecera
+            xsql es_sii_mr_lrfe             ( SuministroLRFacturasEmitidas:     Altas y Modificaciones + )
+                                            ( BajaLRFacturasEmitidas:           Bajas )
+            xsql es_sii_mr_lrce             ( SuministroLRCobrosEmitidas:       Altas, Modificaciones y Bajas )
+
+            xsql es_sii_mr_lrfr             ( SuministroLRFacturasRecibidas:    Altas y Modificaciones + )
+                                            ( BajaLRFacturasRecibidas:          Bajas )
+            xsql es_sii_mr_lrpr             ( SuministroLRPagosRecibidas:       Altas, Modificaciones y Bajas )
+
+            xsql es_sii_mr_lrcm             ( SuministroLRCobrosMetalico:       Altas y Modificaciones + )
+                                            ( BajaLRCobrosMetalico:             Bajas )
+
+            xsql es_sii_mr_lros             ( SuministroLROperacionesSeguros:   Altas y Modificaciones + )
+                                            ( BajaLROperacionesSeguros:         Bajas )
+            etc.
+
+    Package: "cwsi_messages_send"
+    =============================
+    xsql cwsi_messages_send
+        func local_get_key
+        func local_send_request
+        func local_digest_response
+        func local_es_sii_dr_lrfefr     Podria ser un XSQL !
+
+    Package: "cwsi_messages_digest"         Digest Responses
+    Package: "es_sii_dr"               dr = Digest Responses
+    ========================================================
+    xsql cwsi_messages_digest
+        xsql es_sii_dr
+            xsql es_sii_dr_lrfea     Digest response AnulacionLRFacturasEmitidas   ( ES_SII_LRFEA )
+            xsql es_sii_dr_lrfec     Digest response ConsultaLRFacturasEmitidas    ( ES_SII_LRFEC )
+            xsql es_sii_dr_lrfes     Digest response SuministroLRFacturasEmitidas  ( ES_SII_LRFES )
+
+            xsql es_sii_dr_lrcec     Digest response ConsultaLRCobrosEmitidas      ( ES_SII_LRCEC )
+            xsql es_sii_dr_lrces     Digest response SuministroLRCobrosEmitidas    ( ES_SII_LRCES )
+
+            xsql es_sii_dr_lrfra     Digest response AnulacionLRFacturasRecibidas  ( ES_SII_LRFRA )
+            xsql es_sii_dr_lrfrc     Digest response ConsultaLRFacturasRecibidas   ( ES_SII_LRFRC )
+            xsql es_sii_dr_lrfrs     Digest response SuministroLRFacturasRecibidas ( ES_SII_LRFRS )
+
+            xsql es_sii_dr_lrprc     Digest response ConsultaLRPagosRecibidas      ( ES_SII_LRPRC )
+            xsql es_sii_dr_lrprs     Digest response SuministroLRPagosRecibidas    ( ES_SII_LRPRS )
+
+            xsql es_sii_dr_lrcma     Digest response AnulacionLRCobrosMetalico     ( ES_SII_LRCMA )
+            xsql es_sii_dr_lrcmc     Digest response ConsultaLRCobrosMetalico      ( ES_SII_LRCMC )
+            xsql es_sii_dr_lrcms     Digest response SuministroLRCobrosMetalico    ( ES_SII_LRCMS )
+            etc.
+
+        Código          Servicio                        Método / Operación
+        ============    ==============================  ==================================================
+        ES_SII_LRBIA    SuministroBienesInversion       AnulacionLRBienesInversion / BajaLRBienesInversion
+        ES_SII_LRBIC    SuministroBienesInversion       ConsultaLRBienesInversion
+        ES_SII_LRBIS    SuministroBienesInversion       SuministroLRBienesInversion
+        ES_SII_LRCEC    SuministroCobrosEmitidas        ConsultaLRCobrosEmitidas
+        ES_SII_LRCES    SuministroCobrosEmitidas        SuministroLRCobrosEmitidas
+        ES_SII_LRCMA    SuministroOpTrascendTribu       AnulacionLRCobrosMetalico / BajaLRCobrosMetalico
+        ES_SII_LRCMC    SuministroOpTrascendTribu       ConsultaLRCobrosMetalico
+        ES_SII_LRCMS    SuministroOpTrascendTribu       SuministroLRCobrosMetalico
+        ES_SII_LRFEA    SuministroFactEmitidas          AnulacionLRFacturasEmitidas / BajaLRFacturasEmitidas
+        ES_SII_LRFEC    SuministroFactEmitidas          ConsultaLRFacturasEmitidas
+        ES_SII_LRFES    SuministroFactEmitidas          SuministroLRFacturasEmitidas
+        ES_SII_LRFRA    SuministroFactRecibidas         AnulacionLRFacturasRecibidas / BajaLRFacturasRecibidas
+        ES_SII_LRFRC    SuministroFactRecibidas         ConsultaLRFacturasRecibidas
+        ES_SII_LRFRS    SuministroFactRecibidas         SuministroLRFacturasRecibidas
+        ES_SII_LROIA    SuministroOpIntracomunitarias   AnulacionLRDetOperacionIntracomunitaria / BajaLRDetOperacionIntracomunitaria
+        ES_SII_LROIC    SuministroOpIntracomunitarias   ConsultaLRDetOperacionIntracomunitaria
+        ES_SII_LROIS    SuministroOpIntracomunitarias   SuministroLRDetOperacionIntracomunitaria
+        ES_SII_LROSA    SuministroOpTrascendTribu       AnulacionLROperacionesSeguros / BajaLROperacionesSeguros
+        ES_SII_LROSC    SuministroOpTrascendTribu       ConsultaLROperacionesSeguros
+        ES_SII_LROSS    SuministroOpTrascendTribu       SuministroLROperacionesSeguros
+        ES_SII_LRPRC    SuministroPagosRecibidas        ConsultaLRPagosRecibidas
+        ES_SII_LRPRS    SuministroPagosRecibidas        SuministroLRPagosRecibidas
+-->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_sp_lrfefr'>
+
+    <args>
+        <arg name='p_modo'                  type='smallint' info='Tareas a ejecutar. 1: Añadir facturas  ;  2: Añadir facturas y generar mensajes  ;  3: Añadir facturas, generar y entregar mensajes' />
+        <arg name='p_str_empcode'           type='string'   info='Company code' />
+        <arg name='p_str_query'             type='string'   info='Query' />
+        <arg name='p_generic_fecdec_ini'    type='date'     info='Start date o null' />
+        <arg name='p_generic_fecdec_fin'    type='date'     info='End date o null' />
+    </args>
+
+    <body>
+<!--
+<set name='p_modo'>1</set>
+<set name='p_str_empcode'> LIKE '%'</set>
+<set name='p_str_query'><string>es_sii_facturas.libro = 'FE' and es_sii_facturas.numfactura = 'HMD-037001/2'</string></set>
+<set name='p_generic_fecdec_ini' type='date'><null/></set>
+<set name='p_generic_fecdec_fin' type='date'><null/></set>
+-->
+<!-- Atencio no fer multilinia:
+<set name='p_str_query'><string>es_sii_facturas.libro = 'FE' AND es_sii_facturas.nifpresentador = 'A08211989' AND es_sii_facturas.idemisor       = 'A08211989' AND es_sii_facturas.numfactura     = 'HMD-037001' AND es_sii_facturas.fechafactura = MDY(1, 9, 2017)</string></set>
+-->
+
+<!--
+<unique  name='u_cimpcont_head1'    columns='empcode, natfac, fecdoc, cif, docser' />
+<unique  name='u_cimpcont_head2'    columns='empcode, natfac, cif_emisor, docser, fecdoc' />
+
+<primary name='p_es_sii_facturas'     columns='nifpresentador, idemisor, numfactura, fechafactura' />
+<index name='i_es_sii_facturas1'    columns='nifpresentador, erp_estado, sii_estado, ejercicio, periodo, libro, tipocomunicacion' />
+-->
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <or>
+                    <isnull><p_str_query/></isnull>
+                    <eq><string.length><p_str_query/></string.length>0</eq>
+                </or>
+            </expr>
+            <then>
+                <set name='p_str_query'><string>1 = 1</string></set>
+            </then>
+        </if>
+
+<!--
+update cimpcont_head set head_status = 0 where head_status = 1;
+delete from es_sii_facturas     where 1=1;
+delete from es_sii_facturas_his where 1=1;
+delete from es_sii_requests     where 1=1;
+delete from cwsi_messages       where 1=1;
+
+68 segons   32541
+-->
+
+<!-- PROCESO:
+MAIN
+    FOREACH empresa
+        es_sii_get_fechas   m_fecdec_ini   m_fecdec_fin
+
+        local_remove_verify       Comprueba que no existan facturas ANULADAS del sistema SII en el
+                                  controlador cimpcont_head.
+
+        local_remove_delete       Localiza y prepara las facturas que deben ser eliminadas,
+                                  comunicando BAJA o CANCELANDO el registro.
+
+        local_modify_link         Reenlaza las facturas que han sido moodificadas al sistema SII.
+
+        local_add_invoices        Añade las nuevas facturas pendientes de declarar al sistema SII.
+-->
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_get_tableorview                                              -->
+        <!--                                                                         -->
+        <!-- Si existe VIEW para TABNAME + "_v" devuelve el nombre de la vista, en   -->
+        <!-- caso contrario devuelve el nombre de la tabla.                          -->
+        <!--                                                                         -->
+        <!-- En instalaciones antiguas si la estructura de la tabla cimpcont está    -->
+        <!-- desfasada puede crearse una vista para adaptar al nuevo modelo en la    -->
+        <!-- medida de lo posible. En especial afecta a las columnas codnac, codpos, -->
+        <!-- fecrec y docrec                                                         -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_get_tableorview'>
+            <args>
+                <arg name='p_tabname'       type='string' />
+            </args>
+            <body>
+
+                <set name='m_viewname'><add><p_tabname/><string>_v</string></add></set>
+                <try>
+                    <body>
+                        <!-- Devuelve VIEW or exception: Table 'cimpcont_v' not found -->
+                        <!-- Devolvía VIEW or null                                    -->
+
+                        <set name='m_tabletype'>
+                            <table.getTableType table='${m_viewname}' />
+                        </set>
+                    </body>
+                    <catch>
+                        <!-- XSQLScriptException: Table 'cimpcont_v' not found -->
+                        <set name='m_tabletype'><null/></set>
+                    </catch>
+                </try>
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_tabletype/>VIEW</eq>
+                    </expr>
+                    <then>
+                        <return><m_viewname/></return>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return>
+                    <p_tabname/>
+                </return>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_remove_verify                                                -->
+        <!-- Comprueba que no existan facturas ANULADAS en el sistema SII.           -->
+        <!-- ======================================================================= -->
+        <function name='local_remove_verify'>
+            <args>
+                <arg name='p_idversionsii'              type='string' />
+                <arg name='p_str_query_es_sii_facturas' type='string' />
+                <arg name='p_empcode'                   type='string' />
+                <arg name='p_nifpresentador'            type='string' />
+                <arg name='p_fecdec_ini'                type='date' />
+                <arg name='p_fecdec_fin'                type='date' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!-- Facturas no declaradas                                                  -->
+                <!-- ======================================================================= -->
+                <set name='p_str_query_es_sii_facturas'>
+                    <string.replaceAll>
+                        <p_str_query_es_sii_facturas/>
+                        <string>es_sii_facturas.</string>
+                        <string>s.</string>
+                    </string.replaceAll>
+                </set>
+                <foreach>
+                    <select prefix='cimpcont_head_'>
+                        <columns>
+                            cimpcont_head.*
+                        </columns>
+                        <from table='cimpcont_head'/>
+                        <where>
+                                cimpcont_head.empcode       = <p_empcode/>
+                            AND cimpcont_head.fecha         BETWEEN <p_fecdec_ini/> AND <p_fecdec_fin/>
+                            AND cimpcont_head.head_status   = 0
+                            AND EXISTS (SELECT s.numfactura
+                                          FROM es_sii_facturas s
+                                         WHERE s.nifpresentador = <p_nifpresentador/>
+                                           AND s.idemisor       = cimpcont_head.cif_emisor
+                                           AND s.numfactura     = cimpcont_head.docser
+                                           AND s.fechafactura   = cimpcont_head.fecdoc
+                                           AND s.erp_estado     IN ('B', 'C')
+                                           AND <p_str_query_es_sii_facturas mode='unquoted'/>)
+                        </where>
+                        <order>empcode, natfac, fecdoc, cif, docser</order>
+                    </select>
+                    <do>
+                        <exception>Factura anulada [<cimpcont_head_head_seqno/>] en [es_sii_facturas]. Revisar la factura con ID [<cimpcont_head_cif_emisor/>]+[<cimpcont_head_docser/>]+[<cimpcont_head_fecdoc/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_remove_delete                                                -->
+        <!-- Localiza y prepara las facturas que deben ser eliminadas,               -->
+        <!-- comunicando BAJA o CANCELANDO el registro.                              -->
+        <!-- ======================================================================= -->
+        <function name='local_remove_delete'>
+            <args>
+                <arg name='p_idversionsii'              type='string' />
+                <arg name='p_str_query_es_sii_facturas' type='string' />
+                <arg name='p_empcode'                   type='string' />
+                <arg name='p_nifpresentador'            type='string' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!-- Facturas en tránsito de modificación o de baja.                         -->
+                <!-- ======================================================================= -->
+                <foreach>
+                    <select prefix='es_sii_facturas_'>
+                        <columns>
+                            es_sii_facturas.*,
+                            CASE WHEN libro = 'FE' THEN 'V' WHEN libro = 'FR' THEN 'C' ELSE 'X' END AS natfac
+                        </columns>
+                        <from table='es_sii_facturas'/>
+                        <where>
+                                es_sii_facturas.empcode        = <p_empcode/>
+                            AND es_sii_facturas.nifpresentador = <p_nifpresentador/>
+                            AND es_sii_facturas.erp_estado     = 'B'            <!-- Tránsito de baja -->
+                            AND es_sii_facturas.head_seqno     IS NULL
+                            AND <p_str_query_es_sii_facturas mode='unquoted'/>
+                        </where>
+                        <order>nifpresentador, idemisor, numfactura, fechafactura</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!-- Busca el registro de control de factura en cimpcont_head para enlazarlo -->
+                        <!-- con el registro de control de comunicación con el sistema SII.          -->
+                        <!-- ======================================================================= -->
+                        <select prefix='cimpcont_head_'>
+                            <columns>
+                                cimpcont_head.*
+                            </columns>
+                            <from table='cimpcont_head'/>
+                            <where>
+                                    cimpcont_head.empcode       = <p_empcode/>
+                                AND cimpcont_head.natfac        = <es_sii_facturas_natfac/>
+                                AND cimpcont_head.cif_emisor    = <es_sii_facturas_idemisor/>
+                                AND cimpcont_head.docser        = <es_sii_facturas_numfactura/>
+                                AND cimpcont_head.fecdoc        = <es_sii_facturas_fechafactura/>
+                            </where>
+                        </select>
+<!-- index implicats:
+CREATE UNIQUE INDEX u_cimpcont_head1 ON cimpcont_head  (empcode, natfac, fecdoc, cif, docser);
+ALTER TABLE cimpcont_head ADD CONSTRAINT UNIQUE        (empcode, natfac, fecdoc, cif, docser) CONSTRAINT u_cimpcont_head1;
+
+CREATE UNIQUE INDEX u_cimpcont_head2 ON cimpcont_head  (empcode, natfac, cif_emisor, docser, fecdoc);
+ALTER TABLE cimpcont_head ADD CONSTRAINT UNIQUE        (empcode, natfac, cif_emisor, docser, fecdoc) CONSTRAINT u_cimpcont_head2;
+
+CREATE UNIQUE INDEX p_es_sii_facturas  ON es_sii_facturas (nifpresentador, idemisor, numfactura, fechafactura);
+ALTER TABLE es_sii_facturas ADD CONSTRAINT PRIMARY KEY (nifpresentador, idemisor, numfactura, fechafactura) CONSTRAINT p_es_sii_facturas;
+-->
+                        <!-- ======================================================================= -->
+                        <!-- Si se encuentra registro en cimpcont_head cancela el proceso por        -->
+                        <!-- tratarse de una factura en tránsito de BAJA.                            -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnotnull><cimpcont_head_head_seqno/></isnotnull>
+                            </expr>
+                            <then>
+                                <exception>Factura anulada [<cimpcont_head_head_seqno/>] en [es_sii_facturas]. Revisar la factura con ID [<cimpcont_head_cif_emisor/>]+[<cimpcont_head_docser/>]+[<cimpcont_head_fecdoc/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Adapta el registro para Comunicar BAJA o Cancelar sin comunicación.     -->
+                        <!-- ======================================================================= -->
+                        <update table='es_sii_facturas'>
+                            <column name='tipocomunicacion'><string>B</string></column>
+                            <column name='erp_estado' text='true'>(CASE WHEN check_sii_estado IN ('1', '2') THEN 'P' ELSE 'C' END)</column>
+                            <where>
+                                    es_sii_facturas.nifpresentador = <p_nifpresentador/>
+                                AND es_sii_facturas.idemisor       = <es_sii_facturas_idemisor/>
+                                AND es_sii_facturas.numfactura     = <es_sii_facturas_numfactura/>
+                                AND es_sii_facturas.fechafactura   = <es_sii_facturas_fechafactura/>
+                                AND es_sii_facturas.erp_estado     = 'B'            <!-- Tránsito de baja -->
+                                AND es_sii_facturas.head_seqno     IS NULL
+                            </where>
+                        </update>
+                        <set name='m_es_sii_facturas_regs'><sqlca.count /></set>
+                        <if>
+                            <expr>
+                                <ne><m_es_sii_facturas_regs/>1</ne>
+                            </expr>
+                            <then>
+                                <exception>Error durante el reenlace [<cimpcont_head_head_seqno/>] en [es_sii_facturas]. Se han modificado [<m_es_sii_facturas_regs/>] registros para la factura con ID [<es_sii_facturas_idemisor/>]+[<es_sii_facturas_numfactura/>]+[<es_sii_facturas_fechafactura/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                            </then>
+                        </if>
+
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_modify_link                                                  -->
+        <!-- Reenlaza las facturas que han sido moodificadas.                        -->
+        <!-- ======================================================================= -->
+        <function name='local_modify_link'>
+            <args>
+                <arg name='p_idversionsii'              type='string' />
+                <arg name='p_str_query_es_sii_facturas' type='string' />
+                <arg name='p_empcode'                   type='string' />
+                <arg name='p_nifpresentador'            type='string' />
+                <arg name='p_grpent'                    type='string' />
+                <arg name='p_today'                     type='date' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <set name='m_user_created'><system.user.getCode /></set>
+                <set name='m_date_created'><date.current /></set>
+
+                <!-- ======================================================================= -->
+                <!-- Determina si cimpcont TABLE o cimpcont_v VIEW                           -->
+                <!-- ======================================================================= -->
+                <set name='m_cimpcont_access'><local_get_tableorview>cimpcont</local_get_tableorview></set>
+
+                <!-- ======================================================================= -->
+                <!-- Facturas en tránsito de modificación no enlazadas.                      -->
+                <!-- ======================================================================= -->
+                <foreach>
+                    <select prefix='es_sii_facturas_'>
+                        <columns>
+                            es_sii_facturas.*,
+                            CASE WHEN libro = 'FE' THEN 'V' WHEN libro = 'FR' THEN 'C' ELSE 'X' END AS natfac
+                        </columns>
+                        <from table='es_sii_facturas'/>
+                        <where>
+                                es_sii_facturas.empcode        = <p_empcode/>
+                            AND es_sii_facturas.nifpresentador = <p_nifpresentador/>
+                            AND es_sii_facturas.erp_estado     = 'M'            <!-- Tránsito de modificación -->
+                            AND es_sii_facturas.head_seqno     IS NULL
+                            AND EXISTS (SELECT cimpcont_head.head_seqno FROM cimpcont_head WHERE <p_str_query_es_sii_facturas mode='unquoted'/>)
+ <!-- fcm                   AND <p_str_query_es_sii_facturas mode='unquoted'/> -->
+                        </where>
+                        <order>nifpresentador, idemisor, numfactura, fechafactura</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!-- Busca el registro de control de factura en cimpcont_head para enlazarlo -->
+                        <!-- con el registro de control de comunicación con el sistema SII.          -->
+                        <!-- ======================================================================= -->
+                        <select prefix='cimpcont_head_'>
+                            <columns>
+                                cimpcont_head.*,
+                                cimpcont.proyec, cimpcont.seccio, cimpcont.tercer, cimpcont.tipdir,
+                                cimpcont.zimfis, cimpcont.zimter, cimpcont.opeimp, cimpcont.fecope,
+                                cimpcont.docrec, cimpcont.fecrec, cimpcont.cashvat,cimpcont.valida,
+                                cimpcont.numefe,
+                                coperimp.nomope,
+                                es_sii_get_is_eur ( cimpcont.zimter ) AS is_eur,
+                                (SELECT COUNT(*) FROM ${m_cimpcont_access} s
+                                  WHERE s.empcode = cimpcont.empcode
+                                    AND s.natfac  = cimpcont.natfac
+                                    AND s.fecdoc  = cimpcont.fecdoc
+                                    AND s.cif     = cimpcont.cif
+                                    AND s.docser  = cimpcont.docser
+                                    AND s.tipimp  = 'R') AS hay_retenciones
+                            </columns>
+                            <from table='cimpcont_head'>
+                                <join type='inner' table='${m_cimpcont_access}' alias='cimpcont'>
+                                    <on>cimpcont_head.orden = cimpcont.orden</on>
+                                    <join type='left' table='coperimp'>
+                                        <on>cimpcont.opeimp = coperimp.opeimp</on>
+                                    </join>
+                                </join>
+                            </from>
+                            <where>
+                                    cimpcont_head.empcode       = <p_empcode/>
+                                AND cimpcont_head.natfac        = <es_sii_facturas_natfac/>
+                                AND cimpcont_head.cif_emisor    = <es_sii_facturas_idemisor/>
+                                AND cimpcont_head.docser        = <es_sii_facturas_numfactura/>
+                                AND cimpcont_head.fecdoc        = <es_sii_facturas_fechafactura/>
+                            </where>
+                        </select>
+<!-- index implicats:
+CREATE UNIQUE INDEX u_cimpcont_head1 ON cimpcont_head  (empcode, natfac, fecdoc, cif, docser);
+ALTER TABLE cimpcont_head ADD CONSTRAINT UNIQUE        (empcode, natfac, fecdoc, cif, docser) CONSTRAINT u_cimpcont_head1;
+
+CREATE UNIQUE INDEX u_cimpcont_head2 ON cimpcont_head  (empcode, natfac, cif_emisor, docser, fecdoc);
+ALTER TABLE cimpcont_head ADD CONSTRAINT UNIQUE        (empcode, natfac, cif_emisor, docser, fecdoc) CONSTRAINT u_cimpcont_head2;
+
+CREATE UNIQUE INDEX p_es_sii_facturas  ON es_sii_facturas (nifpresentador, idemisor, numfactura, fechafactura);
+ALTER TABLE es_sii_facturas ADD CONSTRAINT PRIMARY KEY (nifpresentador, idemisor, numfactura, fechafactura) CONSTRAINT p_es_sii_facturas;
+-->
+                        <!-- ======================================================================= -->
+                        <!-- Reenlace de una factura:                                                -->
+                        <!--     1) Si ha encontrado el registro controlador lo reenlaza.            -->
+                        <!--                                                                         -->
+                        <!--     2) Si no lo ha encontrado no hace nada. Mañana lo volverá a         -->
+                        <!--        intentar. Los canales de supervisión de las facturas comunicadas -->
+                        <!--        al sistema SII (es_sii_facturas) deben dar cuenta de las         -->
+                        <!--        facturas en tránsito de modificación que puedan quedar atrasadas.-->
+                        <!--        Otra opción es detectar atrasos importantes y generar una        -->
+                        <!--        excepción desde este proceso para abortar la generacuón de nuevas-->
+                        <!--        comunicaciones.                                                  -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnotnull><cimpcont_head_head_seqno/></isnotnull>
+                            </expr>
+                            <then>
+
+                                <if>
+                                    <expr>
+                                        <eq><cimpcont_head_head_status/>0</eq>
+                                    </expr>
+                                    <then>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Marca la factura como declarada.                                        -->
+                                        <!-- ======================================================================= -->
+                                        <update table='cimpcont_head'>
+                                            <column name='head_status'><number>1</number></column>
+                                            <where>
+                                                   head_seqno = <cimpcont_head_head_seqno/>
+                                            </where>
+                                        </update>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Marca la factura como declarada.                                        -->
+                                        <!-- ======================================================================= -->
+                                        <set name='cimpcont_proyec'><cimpcont_head_proyec/></set>
+                                        <set name='cimpcont_seccio'><cimpcont_head_seccio/></set>
+                                        <set name='cimpcont_tercer'><cimpcont_head_tercer/></set>
+                                        <set name='cimpcont_tipdir'><cimpcont_head_tipdir/></set>
+                                        <set name='cimpcont_zimfis'><cimpcont_head_zimfis/></set>
+                                        <set name='cimpcont_zimter'><cimpcont_head_zimter/></set>
+                                        <set name='cimpcont_opeimp'><cimpcont_head_opeimp/></set>
+                                        <set name='cimpcont_fecope'><cimpcont_head_fecope/></set>
+                                        <set name='cimpcont_docrec'><cimpcont_head_docrec/></set>
+                                        <set name='cimpcont_fecrec'><cimpcont_head_fecrec/></set>
+                                        <set name='cimpcont_cashvat'><cimpcont_head_cashvat/></set>
+                                        <set name='cimpcont_valida'><cimpcont_head_valida/></set>
+                                        <set name='cimpcont_numefe'><cimpcont_head_numefe/></set>
+                                        <set name='coperimp_nomope'><cimpcont_head_nomope/></set>
+                                        <set name='m_is_eur'><cimpcont_head_is_eur/></set>
+                                        <set name='m_hay_retenciones'><cimpcont_head_hay_retenciones/></set>
+                                        <unset name='cimpcont_head_proyec'/>
+                                        <unset name='cimpcont_head_seccio'/>
+                                        <unset name='cimpcont_head_tercer'/>
+                                        <unset name='cimpcont_head_tipdir'/>
+                                        <unset name='cimpcont_head_zimfis'/>
+                                        <unset name='cimpcont_head_zimter'/>
+                                        <unset name='cimpcont_head_opeimp'/>
+                                        <unset name='cimpcont_head_fecope'/>
+                                        <unset name='cimpcont_head_docrec'/>
+                                        <unset name='cimpcont_head_fecrec'/>
+                                        <unset name='cimpcont_head_cashvat'/>
+                                        <unset name='cimpcont_head_valida'/>
+                                        <unset name='cimpcont_head_numefe'/>
+                                        <unset name='cimpcont_head_nomope'/>
+                                        <unset name='cimpcont_head_is_eur'/>
+                                        <unset name='cimpcont_head_hay_retenciones'/>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Obtiene los valores sensibles de la factura para la declaración:        -->
+                                        <!-- ======================================================================= -->
+                                        <call name='es_sii_get_values' into='m_ejercicio, m_periodo, m_importetotal, m_tipofactura, m_claveoperacion, m_claveoperaciona1, m_claveoperaciona2, m_descoperacion'>
+                                            <cimpcont_head_head_seqno/>
+                                            <cimpcont_head_orden/>
+                                            <cimpcont_head_empcode/>
+                                            <p_grpent/>
+                                            <cimpcont_proyec/>
+                                            <cimpcont_seccio/>
+                                            <cimpcont_tercer/>
+                                            <cimpcont_tipdir/>
+                                            <cimpcont_zimfis/>
+                                            <cimpcont_zimter/>
+                                            <cimpcont_opeimp/>
+                                            <coperimp_nomope/>
+                                            <null/>                     <!-- Probable uso futuro: cimpcont_head.descoperacion -->
+                                            <cimpcont_docrec/>
+                                            <cimpcont_fecrec/>
+                                            <cimpcont_head_jusser/>
+                                            <cimpcont_head_docser/>
+                                            <cimpcont_head_natfac/>
+                                            <es_sii_facturas_libro/>
+                                            <cimpcont_fecope/>
+                                            <cimpcont_head_fecdoc/>
+                                            <cimpcont_head_fecha/>
+                                            <cimpcont_head_date_created/>
+                                            <cimpcont_head_cif/>
+                                            <cimpcont_cashvat/>
+                                            <cimpcont_valida/>
+                                            <cimpcont_numefe/>
+                                            <m_is_eur/>
+                                            <m_hay_retenciones/>
+                                            <p_idversionsii/>
+                                        </call>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Enlace en es_sii_facturas                                               -->
+                                        <!-- ======================================================================= -->
+                                        <update table='es_sii_facturas'>
+                                            <column name='head_seqno'><cimpcont_head_head_seqno/></column>
+                                            <column name='tipocomunicacion' text='true'>(CASE WHEN check_sii_estado IN ('1', '2') THEN 'A1' ELSE 'A0' END)</column>
+                                            <column name='ejercicio'><m_ejercicio/></column>
+                                            <column name='periodo'><m_periodo/></column>
+                                            <column name='tipofactura'><m_tipofactura/></column>
+                                            <column name='claveoperacion'><m_claveoperacion/></column>
+                                            <column name='claveoperaciona1'><m_claveoperaciona1/></column>
+                                            <column name='claveoperaciona2'><m_claveoperaciona2/></column>
+                                            <column name='importetotal'><m_importetotal/></column>
+                                            <column name='descoperacion'><m_descoperacion/></column>
+                                            <column name='erp_estado'><string>P</string></column>
+                                            <column name='user_updated'><m_user_created/></column>
+                                            <column name='date_updated'><m_date_created/></column>
+                                            <where>
+                                                    es_sii_facturas.nifpresentador = <p_nifpresentador/>
+                                                AND es_sii_facturas.idemisor       = <es_sii_facturas_idemisor/>
+                                                AND es_sii_facturas.numfactura     = <es_sii_facturas_numfactura/>
+                                                AND es_sii_facturas.fechafactura   = <es_sii_facturas_fechafactura/>
+                                                AND es_sii_facturas.erp_estado     = 'M'            <!-- Tránsito de modificación -->
+                                                AND es_sii_facturas.head_seqno     IS NULL
+                                            </where>
+                                        </update>
+                                        <set name='m_es_sii_facturas_regs'><sqlca.count /></set>
+                                        <if>
+                                            <expr>
+                                                <ne><m_es_sii_facturas_regs/>1</ne>
+                                            </expr>
+                                            <then>
+                                                <exception>Error durante el reenlace [<cimpcont_head_head_seqno/>] en [es_sii_facturas]. Se han modificado [<m_es_sii_facturas_regs/>] registros para la factura con ID [<es_sii_facturas_idemisor/>]+[<es_sii_facturas_numfactura/>]+[<es_sii_facturas_fechafactura/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                                            </then>
+                                        </if>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Enlace en cimpcont_head                                                 -->
+                                        <!-- ======================================================================= -->
+                                        <update table='cimpcont_head'>
+                                            <column name='head_status'><number>1</number></column>
+                                            <where>
+                                                   head_seqno = <cimpcont_head_head_seqno/>
+                                            </where>
+                                        </update>
+                                        <set name='m_cimpcont_head_regs'><sqlca.count /></set>
+                                        <if>
+                                            <expr>
+                                                <ne><m_cimpcont_head_regs/>1</ne>
+                                            </expr>
+                                            <then>
+                                                <exception>Error durante el reenlace [<cimpcont_head_head_seqno/>] en [cimpcont_head]. Se han modificado [<m_cimpcont_head_regs/>] registros para la factura con ID [<es_sii_facturas_idemisor/>]+[<es_sii_facturas_numfactura/>]+[<es_sii_facturas_fechafactura/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                                            </then>
+                                        </if>
+                                    </then>
+                                    <else>
+                                        <exception>Error durante la realización del reenlace. La factura con ID [<es_sii_facturas_idemisor/>]+[<es_sii_facturas_numfactura/>]+[<es_sii_facturas_fechafactura/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>] ya está declarada.</exception>
+                                    </else>
+                                </if>
+
+                            </then>
+                            <else>
+                                <set name='m_dias_atraso_maximo'>1</set>
+                                <set name='m_dias_atraso_real'><sub><p_today/><date><es_sii_facturas_date_updated/></date></sub></set>
+                                <if>
+                                    <expr>
+                                        <gt><m_dias_atraso_real/><m_dias_atraso_maximo/></gt>
+                                    </expr>
+                                    <then>
+                                        <exception>Error durante el reenlace de una factura en tránsito de modificación debido a un atraso de [<m_dias_atraso_real/>] días.<string.nl/>ID [<es_sii_facturas_idemisor/>]+[<es_sii_facturas_numfactura/>]+[<es_sii_facturas_fechafactura/>] del presentador y empresa [<p_nifpresentador/>] [<p_empcode/>]</exception>
+                                    </then>
+                                </if>
+                            </else>
+                        </if>
+
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_add_invoices                                                 -->
+        <!-- Añade las nuevas facturas pendientes de declarar al sistema SII.        -->
+        <!-- ======================================================================= -->
+        <function name='local_add_invoices'>
+            <args>
+                <arg name='p_idversionsii'              type='string' />
+                <arg name='p_str_query_cimpcont_head'   type='string' />
+                <arg name='p_empcode'                   type='string' />
+                <arg name='p_nifpresentador'            type='string' />
+                <arg name='p_grpent'                    type='string' />
+                <arg name='p_fecdec_ini'                type='date' />
+                <arg name='p_fecdec_fin'                type='date' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <set name='m_user_created'><system.user.getCode /></set>
+                <set name='m_date_created'><date.current /></set>
+
+                <!-- ======================================================================= -->
+                <!-- Determina si cimpcont TABLE o cimpcont_v VIEW                           -->
+                <!-- ======================================================================= -->
+                <set name='m_cimpcont_access'><local_get_tableorview>cimpcont</local_get_tableorview></set>
+
+				<!-- ======================================================================= -->
+                <!-- LIMITES SOBRE FECHA DE CONTABILIZACIÓN:                                 -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <ge><p_fecdec_ini/><date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy></ge>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- INICIO EN PRODUCCIÓN A PARTIR 01-07-2017:                               -->
+                        <!-- Si estamos presentando a partir del 01-07-2017 fijamos los registros    -->
+                        <!-- seleccionables considerando la fecha de registro contable mayor o igual -->
+                        <!-- del 01-07-2017                                                          -->
+                        <!-- ======================================================================= -->
+                        <set name='m_fecha_inicio' type='date'>
+                            <date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy>
+                        </set>
+                        <!--
+                        <set name='m_str_fecha_contab'><add><string> AND cimpcont_head.fecha  >= </string><variable.toQuery><m_fecha_inicio/></variable.toQuery></add></set>
+                        -->
+						<!-- CURSACH: Solo enviamos contabilizaciones hasta ayer -->
+                        <set name='m_str_fecha_contab'><add><string> AND cimpcont_head.fecha  BETWEEN </string><variable.toQuery><m_fecha_inicio/></variable.toQuery><string> AND </string><variable.toQuery><p_fecdec_fin/></variable.toQuery></add></set>
+                        
+                    </then>
+                    <else>
+                        <!-- ======================================================================= -->
+                        <!-- PRIMER SEMESTRE 2017:                                                   -->
+                        <!-- Si estamos presentando con fecha anterior al 01-07-2017 fijamos los     -->
+                        <!-- registros seleccionables considerando la fecha de registro contable     -->
+                        <!-- dentro del periodo 01-01-2017 al 30-06-2017                             -->
+                        <!-- ======================================================================= -->
+                        <set name='m_fecha_inicio' type='date'>
+                            <date.mdy><number>1</number><number>1</number><number>2017</number></date.mdy>
+                        </set>
+                        <set name='m_fecha_fin'    type='date'>
+                            <date.mdy><number>6</number><number>30</number><number>2017</number></date.mdy>
+                        </set>
+                        <set name='m_str_fecha_contab'><add><string> AND cimpcont_head.fecha  BETWEEN </string><variable.toQuery><m_fecha_inicio/></variable.toQuery><string> AND </string><variable.toQuery><m_fecha_fin/></variable.toQuery></add></set>
+                    </else>
+                </if>
+
+
+                <!-- ======================================================================= -->
+                <!-- Facturas no declaradas                                                  -->
+                <!-- ======================================================================= -->
+                <foreach>
+                    <select prefix='cimpcont_head_'>
+                        <columns>
+                            cimpcont_head.*
+                        </columns>
+                        <from table='cimpcont_head_v' alias='cimpcont_head' />
+                        <where>
+                                cimpcont_head.empcode       = <p_empcode/>
+                            AND cimpcont_head.fecref        BETWEEN <p_fecdec_ini/> AND <p_fecdec_fin/>
+                            AND cimpcont_head.head_status   = 0
+                            AND <p_str_query_cimpcont_head mode='unquoted'/>
+							<m_str_fecha_contab mode='unquoted'/>
+                        </where>
+                        <order>cimpcont_head.empcode, cimpcont_head.natfac, cimpcont_head.fecdoc, cimpcont_head.cif, cimpcont_head.docser</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!-- Primera consideración)                                                  -->
+                        <!-- Seleccionamos cimpcont (o cimpcont_v) para optimizar rendimiento en el  -->
+                        <!-- caso de realizar query en el foreach principal contra la vista cimpcont_v -->
+                        <!-- Segunda consideración)                                                  -->
+                        <!-- En versiones sin cimpcont.codnac, la vista cimpcont_v se crea con       -->
+                        <!-- relación INNER a cterdire, con ello optimizamos el rendimiento pero     -->
+                        <!-- si la query a cterdire falla perdemos la tupla devolviendo excepción    -->
+                        <!-- por el required.                                                        -->
+                        <!-- ======================================================================= -->
+                        <select prefix='cimpcont_head_' required='[${cimpcont_head_orden}]'>
+                            <columns>
+                                cimpcont.proyec, cimpcont.seccio, cimpcont.tercer, cimpcont.tipdir,
+                                cimpcont.zimfis, cimpcont.zimter, cimpcont.opeimp, cimpcont.fecope,
+                                cimpcont.docrec, cimpcont.fecrec, cimpcont.cashvat,cimpcont.valida,
+                                cimpcont.numefe,
+                                coperimp.nomope,
+                                es_sii_get_is_eur ( cimpcont.zimter ) AS is_eur,
+                                (SELECT COUNT(*) FROM ${m_cimpcont_access} s
+                                  WHERE s.empcode = cimpcont.empcode
+                                    AND s.natfac  = cimpcont.natfac
+                                    AND s.fecdoc  = cimpcont.fecdoc
+                                    AND s.cif     = cimpcont.cif
+                                    AND s.docser  = cimpcont.docser
+                                    AND s.tipimp  = 'R') AS hay_retenciones,
+                                --ctiponac.coda2
+								NVL(ctiponac.coda2, cimpcont.codnac) coda2
+                            </columns>
+                            <from table='${m_cimpcont_access}' alias='cimpcont'>
+                                <join type='left' table='ctiponac'>
+                                    <on>cimpcont.codnac = ctiponac.codigo</on>
+                                </join>
+                                <join type='left' table='coperimp'>
+                                    <on>cimpcont.opeimp = coperimp.opeimp</on>
+                                </join>
+                            </from>
+                            <where>
+                                    cimpcont.orden = <cimpcont_head_orden/>
+                                <!-- FACTURAS REALIZADAS EN PAÍS VASCO Y NAVARRA SE EXCLUYEN DEL SII:
+                                     1) SI SON BIENES Y LA FÁBRICA ESTÁ EN ESOS TERRITORIOS PORQUE SE DECLARAN FORALMENTE.
+                                     2) LAS EMPRESAS DE TRANSPORTE DECLARAN FORALMENTE SOLO SI EL DOMICILIO FISCAL ESTÁ EN ESOS TERRITORIOS.
+                                        NO CONFUNDIR CON LA SEDE SOCIAL QUE ES DISTINTA AL DOMICILIO FISCAL!
+    
+                                        Código província:
+                                            01  ALAVA
+                                            20  GUIPUZCOA
+                                            48  VIZCAYA
+                                            31  NAVARRA
+    
+                                AND ((ctiponac.coda2  = 'ES' AND SUBSTR(cimpcont.codpos, 1, 2) NOT IN('01', '20', '48', '31'))
+                                     OR
+                                     (ctiponac.coda2 != 'ES' OR ctiponac.coda2 IS NULL OR cimpcont.codpos IS NULL))
+                                -->
+                            </where>
+                        </select>
+
+                        <!-- ======================================================================= -->
+                        <!-- En instalaciones antiguas no existe cimpcont.codnac y por ello no está  -->
+                        <!-- garantizada la obtención de ctiponac.coda2 via las joins de cterdire y  -->
+                        <!-- ctiponac.                                                               -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnull><cimpcont_head_coda2/></isnull>
+                            </expr>
+                            <then>
+                                <exception>No es posible obtener el código de país [ctiponac.coda2] a partir del tercero contraparte [<cimpcont_tercer/>] / [<cimpcont_tipdir/>] para el registro cimpcont_head_head_seqno: [<cimpcont_head_head_seqno/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Permite la exclusión del SII de forma customizada.                      -->
+                        <!-- ======================================================================= -->
+                        <include code='es_sii_sp_lrfefr' name='before_add_invoices' />
+
+                        <!-- ======================================================================= -->
+                        <!-- EXCLUSIÓN DECLARACIÓN SII DE LAS FACTURAS REALIZADAS EN CANARIAS DEL SII  -->
+                        <!-- 18-04-2017                                                                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <string.regexp><cimpcont_head_zimfis/><string>CAN|ESIC</string></string.regexp>
+                            </expr>
+                            <then>
+                                <foreach.continue/>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Marca la factura como declarada.                                        -->
+                        <!-- ======================================================================= -->
+                        <update table='cimpcont_head'>
+                            <column name='head_status'><number>1</number></column>
+                            <where>
+                                   head_seqno = <cimpcont_head_head_seqno/>
+                            </where>
+                        </update>
+
+                        <!-- ======================================================================= -->
+                        <!-- Marca la factura como declarada.                                        -->
+                        <!-- ======================================================================= -->
+                        <set name='cimpcont_proyec'><cimpcont_head_proyec/></set>
+                        <set name='cimpcont_seccio'><cimpcont_head_seccio/></set>
+                        <set name='cimpcont_tercer'><cimpcont_head_tercer/></set>
+                        <set name='cimpcont_tipdir'><cimpcont_head_tipdir/></set>
+                        <set name='cimpcont_zimfis'><cimpcont_head_zimfis/></set>
+                        <set name='cimpcont_zimter'><cimpcont_head_zimter/></set>
+                        <set name='cimpcont_opeimp'><cimpcont_head_opeimp/></set>
+                        <set name='cimpcont_fecope'><cimpcont_head_fecope/></set>
+                        <set name='cimpcont_docrec'><cimpcont_head_docrec/></set>
+                        <set name='cimpcont_fecrec'><cimpcont_head_fecrec/></set>
+                        <set name='cimpcont_cashvat'><cimpcont_head_cashvat/></set>
+                        <set name='cimpcont_valida'><cimpcont_head_valida/></set>
+                        <set name='cimpcont_numefe'><cimpcont_head_numefe/></set>
+                        <set name='coperimp_nomope'><cimpcont_head_nomope/></set>
+                        <set name='m_is_eur'><cimpcont_head_is_eur/></set>
+                        <set name='m_hay_retenciones'><cimpcont_head_hay_retenciones/></set>
+                        <unset name='cimpcont_head_proyec'/>
+                        <unset name='cimpcont_head_seccio'/>
+                        <unset name='cimpcont_head_tercer'/>
+                        <unset name='cimpcont_head_tipdir'/>
+                        <unset name='cimpcont_head_zimfis'/>
+                        <unset name='cimpcont_head_zimter'/>
+                        <unset name='cimpcont_head_opeimp'/>
+                        <unset name='cimpcont_head_fecope'/>
+                        <unset name='cimpcont_head_docrec'/>
+                        <unset name='cimpcont_head_fecrec'/>
+                        <unset name='cimpcont_head_cashvat'/>
+                        <unset name='cimpcont_head_valida'/>
+                        <unset name='cimpcont_head_numefe'/>
+                        <unset name='cimpcont_head_nomope'/>
+                        <unset name='cimpcont_head_is_eur'/>
+                        <unset name='cimpcont_head_hay_retenciones'/>
+
+                        <!-- ======================================================================= -->
+                        <!-- Libro registro (Convenio Axional):                                      -->
+                        <!--     FE  Libro de registro de facturas emitidas                          -->
+                        <!--     FR  Libro de registro de facturas recibidas                         -->
+                        <!--     BI  Libro de registro de bienes de inversión                        -->
+                        <!--     OI  Libro de registro de determinadas operaciones intracomunitarias -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <eq><cimpcont_head_natfac/>V</eq>
+                            </expr>
+                            <then>
+                                <set name='m_libro'>FE</set>   <!-- FE  Libro de registro de facturas emitidas -->
+                            </then>
+                            <else>
+                                <set name='m_libro'>FR</set>   <!-- FR  Libro de registro de facturas recibidas -->
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Tipo de Comunicación L0                                                 -->
+                        <!-- Etiqueta: TipoComunicacion  ( SuministroLRFacturasEmitidas.Cabecera.TipoComunicacion ) -->
+                        <!--     A0  Alta de facturas/registro                                       -->
+                        <!--     A1  Modificación de facturas/registros (errores registrales)        -->
+                        <!--     A4  Modificación Factura Régimen de Viajeros                        -->
+                        <!--     B   Baja. ( Adaptación Axional )                                    -->
+                        <!-- ======================================================================= -->
+                        <set name='m_tipocomunicacion' type='string'>A0</set>
+
+                        <!-- ======================================================================= -->
+                        <!-- Estado control ERP Axional                                              -->
+                        <!--         P = Pendiente / Pendiente generar el mensaje para el sistema SII-->
+                        <!--         G = Generado  / Generado el mensaje para el sistema SII         -->
+                        <!--         E = Entregado / Comunicación y entrega del mensaje al sistema SII                                                           -->
+                        <!--         M = Modificable / En tránsito para gestión de modificación. Factura que deberá ser modificada en sistema SII.               -->
+                        <!--             NOTA: Permite cambios excepto en el identificador de la factura ( nifpresentador, idemisor, numfactura, fechafactura )  -->
+                        <!--         B = Anulable / En tránsito para gestión de baja/anulación. Factura que deberá ser anulada en sistema SII.                   -->
+                        <!--             NOTA: El identificador de la factura ( nifpresentador, idemisor, numfactura, fechafactura )                             -->
+                        <!--                   quedará invalidado, es decir, no podrá ser reusado para nuevas entregas en ningún caso.                           -->
+                        <!--         C = Cancelada / Eliminada del ERP. Nunca registrada en sistema SII                                                          -->
+                        <!--             Factura entregada al sistema SII con recepción de error INCORRECTO, es decir, todos los                                 -->
+                        <!--             intentos de entrega han resultado con error INCORRECTO por este motivo no se debe dar                                   -->
+                        <!--             de BAJA en el sistema SII solo posibilitar su descontabilización del ERP y eliminación                                  -->
+                        <!--             del registro controlador en cimpcont_head                                                                               -->
+                        <!-- ======================================================================= -->
+                        <set name='m_erp_estado'><string>P</string></set>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene los valores sensibles de la factura para la declaración:        -->
+                        <!-- ======================================================================= -->
+                        <call name='es_sii_get_values' into='m_ejercicio, m_periodo, m_importetotal, m_tipofactura, m_claveoperacion, m_claveoperaciona1, m_claveoperaciona2, m_descoperacion'>
+                            <cimpcont_head_head_seqno/>
+                            <cimpcont_head_orden/>
+                            <cimpcont_head_empcode/>
+                            <p_grpent/>
+                            <cimpcont_proyec/>
+                            <cimpcont_seccio/>
+                            <cimpcont_tercer/>
+                            <cimpcont_tipdir/>
+                            <cimpcont_zimfis/>
+                            <cimpcont_zimter/>
+                            <cimpcont_opeimp/>
+                            <coperimp_nomope/>
+                            <null/>                     <!-- Probable uso futuro: cimpcont_head.descoperacion -->
+                            <cimpcont_docrec/>
+                            <cimpcont_fecrec/>
+                            <cimpcont_head_jusser/>
+                            <cimpcont_head_docser/>
+                            <cimpcont_head_natfac/>
+                            <m_libro/>
+                            <cimpcont_fecope/>
+                            <cimpcont_head_fecdoc/>
+                            <cimpcont_head_fecha/>
+                            <cimpcont_head_date_created/>
+                            <cimpcont_head_cif/>
+                            <cimpcont_cashvat/>
+                            <cimpcont_valida/>
+                            <cimpcont_numefe/>
+                            <m_is_eur/>
+                            <m_hay_retenciones/>
+                            <p_idversionsii/>
+                        </call>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <insert table='es_sii_facturas' prepare-cache='true'>
+                            <column name='head_seqno'><cimpcont_head_head_seqno/></column>
+                            <column name='nifpresentador'><p_nifpresentador/></column>
+                            <column name='idemisor'><cimpcont_head_cif_emisor/></column>
+                            <column name='numfactura'><cimpcont_head_docser/></column>
+                            <column name='fechafactura'><cimpcont_head_fecdoc/></column>
+                            <column name='empcode'><cimpcont_head_empcode/></column>
+                            <column name='libro'><m_libro/></column>
+                            <column name='ejercicio'><m_ejercicio/></column>
+                            <column name='periodo'><m_periodo/></column>
+                            <column name='tipofactura'><m_tipofactura/></column>
+                            <column name='claveoperacion'><m_claveoperacion/></column>
+                            <column name='claveoperaciona1'><m_claveoperaciona1/></column>
+                            <column name='claveoperaciona2'><m_claveoperaciona2/></column>
+                            <column name='importetotal'><m_importetotal/></column>
+                            <column name='descoperacion'><m_descoperacion/></column>
+                            <column name='erp_estado'><m_erp_estado/></column>
+                            <column name='tipocomunicacion'><m_tipocomunicacion/></column>
+                            <column name='sii_estado'><null/></column>
+                            <column name='id_ws_request'><null/></column>
+                            <column name='check_tipocomunicacion'><null/></column>
+                            <column name='check_sii_estado'><null/></column>>
+                            <column name='check_id_ws_request'><null/></column>
+                            <column name='user_created'><m_user_created/></column>
+                            <column name='date_created'><m_date_created/></column>
+                            <column name='user_updated'><m_user_created/></column>
+                            <column name='date_updated'><m_date_created/></column>
+                        </insert>
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- INICIO PROCESO                                                          -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Adaptadores de queries globales                                         -->
+        <!-- Principalmente el contenido de p_str_query serà 1 = 1 pero para test    -->
+        <!-- posibilitamos la invocación controlada, donde generalmente indicaremos  -->
+        <!-- un solo documento.                                                      -->
+        <!-- ======================================================================= -->
+        <set name='m_str_query_es_sii_facturas'><p_str_query/></set>
+        <set name='m_str_query_cimpcont_head'><p_str_query/></set>
+        <if>
+            <expr>
+                <string.matches><p_str_query/><string>*es_sii_facturas*</string></string.matches>
+            </expr>
+            <then>
+                <set name='m_str_query_cimpcont_head'><string>1 = 2</string></set>
+            </then>
+        </if>
+        <if>
+            <expr>
+                <string.matches><p_str_query/><string>*cimpcont_head*</string></string.matches>
+            </expr>
+            <then>
+                <set name='m_str_query_es_sii_facturas'><string>1 = 2</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Get Versión                                                             -->
+        <!-- ======================================================================= -->
+        <call name='es_sii_get_idversionsii' into='m_idversionsii' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include code='es_sii_sp_lrfefr' name='before' />
+
+        <!-- ======================================================================== -->
+        <!-- Analiza si existe la columna cempresa.grpent                             -->
+        <!-- ======================================================================== -->
+        <set name='m_col_cempresa_grpent'>cempresa.grpent</set>
+        <set name='m_exists_col_grpent'><table.findColumnIndex table='cempresa' column='grpent' /></set>
+        <if>
+            <expr>
+                <eq><m_exists_col_grpent/>-1</eq>
+            </expr>
+            <then>
+                <set name='m_col_cempresa_grpent'><string>' '</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Cursor empresas.                                                        -->
+        <!-- ======================================================================= -->
+        <foreach>
+            <select prefix='cempresa_' secure='true' >
+                <columns>
+                    cempresa.empcode,
+                    ${m_col_cempresa_grpent} AS grpent,
+                    CASE WHEN ctercero.cif LIKE 'ES%' THEN SUBSTR(ctercero.cif, 3, 20) ELSE ctercero.cif END AS cif
+                </columns>
+                <from table='cempresa'>
+                    <join type='inner' table='ctercero'>
+                        <on>cempresa.tercer = ctercero.codigo</on>
+                    </join>
+                    <join type='inner' table='cterdire'>
+                        <on>cempresa.tercer = cterdire.codigo</on>
+                        <on>cempresa.tipdir = cterdire.tipdir</on>
+                        <join type='inner' table='ctiponac'>
+                            <on>cterdire.codnac = ctiponac.codigo</on>
+                        </join>
+                    </join>
+                </from>
+                <where>
+                        cempresa.estado  = 'A'           <!-- Solo empresas en estado abierto -->
+                    <!-- Excluye empresas de consolidación -->
+<!-- Algunos clientes no tiene la taula cempresa_con
+                    AND cempresa.empcode NOT IN (SELECT c.empcon FROM cempresa_con c)
+-->
+                    AND ctiponac.coda2   = 'ES'          <!-- Solo empresas españolas         -->
+                    AND cempresa.empcode <p_str_empcode mode='unquoted'/>
+                </where>
+                <order>empcode</order>
+            </select>
+            <do>
+
+                <!-- ======================================================================= -->
+                <!-- Devuelve las fechas de inicio y de fin para la presentación de          -->
+                <!-- información al sistema SII.                                             -->
+                <!-- ======================================================================= -->
+                <call name='es_sii_get_fechas' into='m_fecdec_ini, m_fecdec_fin'>
+                    <cempresa_empcode/>
+                </call>
+
+                <!-- ======================================================================= -->
+                <!-- Si m_fecdec_ini IS NULL la empresa no forma parte del censo SII         -->
+                <!-- Seguimos con la siguiente empresa.                                      -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnull><m_fecdec_ini/></isnull>
+                    </expr>
+                    <then>
+                        <foreach.continue/>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Sobrepasa las fechas de inicio y/o de fin si así se ha indicado en los  -->
+                <!-- argumentos de este proceso.                                             -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_generic_fecdec_ini/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_fecdec_ini'><p_generic_fecdec_ini/></set>
+                    </then>
+                </if>
+                <if>
+                    <expr>
+                        <isnotnull><p_generic_fecdec_fin/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_fecdec_fin'><p_generic_fecdec_fin/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><string.length><cempresa_grpent/></string.length>0</eq>
+                    </expr>
+                    <then>
+                        <set name='cempresa_grpent'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <connection.begin/>
+
+                <!-- ======================================================================= -->
+                <!-- Comprueba que no existan facturas ANULADAS del sistema SII en el        -->
+                <!-- controlador cimpcont_head.                                              -->
+                <!-- ======================================================================= -->
+                <local_remove_verify>
+                    <m_idversionsii/>
+                    <m_str_query_es_sii_facturas/>
+                    <cempresa_empcode/>
+                    <cempresa_cif/>
+                    <m_fecdec_ini/>
+                    <m_fecdec_fin/>
+                </local_remove_verify>
+
+                <!-- ======================================================================= -->
+                <!-- Tránsito para BAJA.                                                     -->
+                <!-- Localiza y prepara las facturas que deben ser eliminadas,               -->
+                <!-- comunicando BAJA o CANCELANDO el registro.                              -->
+                <!-- ======================================================================= -->
+                <local_remove_delete>
+                    <m_idversionsii/>
+                    <m_str_query_es_sii_facturas/>
+                    <cempresa_empcode/>
+                    <cempresa_cif/>
+                </local_remove_delete>
+
+                <!-- ======================================================================= -->
+                <!-- Tránsito para MODIFICACIÓN.                                             -->
+                <!-- Reenlaza las facturas que han sido moodificadas al sistema SII.         -->
+                <!-- ======================================================================= -->
+                <local_modify_link>
+                    <m_idversionsii/>
+<!-- fcmfcmfcm
+                    <m_str_query_es_sii_facturas/>
+-->
+                    <p_str_query/>
+                    <cempresa_empcode/>
+                    <cempresa_cif/>
+                    <cempresa_grpent/>
+                    <m_fecdec_fin/>
+                </local_modify_link>
+
+                <!-- ======================================================================= -->
+                <!-- Añade las nuevas facturas pendientes de declarar al sistema SII.        -->
+                <!-- ======================================================================= -->
+                <local_add_invoices>
+                    <m_idversionsii/>
+                    <m_str_query_cimpcont_head/>
+                    <cempresa_empcode/>
+                    <cempresa_cif/>
+                    <cempresa_grpent/>
+                    <m_fecdec_ini/>
+                    <m_fecdec_fin/>
+                </local_add_invoices>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <connection.commit/>
+
+                <!-- ======================================================================= -->
+                <!-- Encadenamiento de procesos:                                             -->
+                <!--    1: Añadir facturas                                                   -->
+                <!--    2: Añadir facturas y generar mensajes                                -->
+                <!--    3: Añadir facturas, generar y entregar mensajes                      -->
+                <!-- ======================================================================= -->
+                 <if>
+                    <expr>
+                        <ge><p_modo/>2</ge>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- XSQL es_sii_mr                                                          -->
+                        <!--                                                                         -->
+                        <!-- Proceso principal para la generación de los mensajes de solicitud del   -->
+                        <!-- sistema SII                                                             -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_str_query_empcode'><string>es_sii_facturas.empcode = <variable.toQuery><cempresa_empcode/></variable.toQuery> AND <m_str_query_es_sii_facturas/></string></set>
+                        <call name='es_sii_mr'>
+                            <p_modo/>
+                            <p_str_query/>
+                        </call>
+                    </then>
+                </if>
+
+            </do>
+        </foreach>
+
+    </body>
+</xsql-script>

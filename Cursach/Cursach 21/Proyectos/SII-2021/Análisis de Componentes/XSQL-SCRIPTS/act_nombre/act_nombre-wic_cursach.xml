@@ -1,0 +1,32 @@
+<xsql-script name='act_nombre'>
+
+    <args>
+        <arg name='p_cif'  type='string' />
+        <arg name='p_nombre'  type='string' />
+        <arg name='p_fecha' type='date' />
+    </args>
+
+    <body>
+	<!-- ============================================ -->
+	<!-- Actualizamos el registro de impuestos        -->
+	<!-- ============================================ -->
+	
+	<update table='cimpcont'>
+		<column name='nombre'><p_nombre/></column>
+		<where> cif = <p_cif/> AND fecha &gt; <p_fecha/></where>
+    </update>
+
+	<!-- ============================================ -->
+	<!-- Actualizamos el registro de terceros        -->
+	<!-- ============================================ -->
+	
+	<update table='ctercero'>
+		<column name='nombre'><p_nombre/></column>
+		<where> cif = <p_cif/></where>
+    </update>
+
+	
+	
+	
+    </body>
+</xsql-script>

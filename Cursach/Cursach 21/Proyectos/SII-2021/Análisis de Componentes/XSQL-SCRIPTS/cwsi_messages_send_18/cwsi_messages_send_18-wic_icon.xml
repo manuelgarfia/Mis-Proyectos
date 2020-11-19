@@ -1,0 +1,2074 @@
+<xsql-script name='cwsi_messages_send_18'>
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL cwsi_messages_send_18                                              -->
+<!--                                                                         -->
+<!-- Proceso para la entrega de los mensajes Web Service.                    -->
+<!--                                                                         -->
+<!-- Módulo ES_SII                                                           -->
+<!--    1) Realiza la entrega de los mensajes al sistema SII                 -->
+<!--    2) y procesa la respuesta recibida.                                  -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+
+    <args>
+        <arg name='p_str_query'             type='string'   info='Query' />
+    </args>
+
+    <body>
+
+<!--
+<set name='p_str_query'><string>1 = 1</string></set>
+<set name='p_str_query'><string>cwsi_messages.id_ws_request = 2</string></set>
+
+update cwsi_messages   set status_message = 'PD' where id_ws_request = 11;
+update es_sii_requests set estadoenvio    = '0'  where id_ws_request = 11;
+update es_sii_facturas set erp_estado     = 'G', sii_estado = '0'  where id_ws_request = 11;
+-->
+        <!-- ======================================================================= -->
+        <!-- GLOBAL VAR g_es_sii_is_batch_process                                    -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr><not><global.isdefined name='g_es_sii_is_batch_process' /></not></expr>
+            <then>
+                <global.set name='g_es_sii_is_batch_process' type='boolean'><false/></global.set>   <!-- Defaul: FALSE -->
+            </then>
+        </if>
+        <if>
+            <expr>
+                <system.getDebug/>
+            </expr>
+            <then>
+                <println>======================= GLOBAL VAR g_es_sii_is_batch_process =========================</println>
+                <println>>>>>> g_es_sii_is_batch_process..: [<global.get name='g_es_sii_is_batch_process'/>]</println>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Get parent.                                                             -->
+        <!-- ======================================================================= -->
+        <global.set name='g_xsql_parent'><system.function.getParent /></global.set>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <or>
+                    <isnull><p_str_query/></isnull>
+                    <eq><string.length><p_str_query/></string.length>0</eq>
+                </or>
+            </expr>
+            <then>
+                <set name='p_str_query'><string>1 = 1</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- FUNCTION: Send request to WebService                                    -->
+        <!-- ======================================================================= -->
+        <function name='local_send_request'>
+            <args>
+                <arg name='p_id_ws_request'             type='integer' />
+                <arg name='p_key_name'                  type='string'  />
+                <arg name='p_message_request'                          />       <!-- no: blob  binary   accepta clob pero genera error in prolog -->
+                <arg name='p_method_code'               type='string'  />
+                <arg name='p_service_name'              type='string'  />
+                <arg name='p_method_name'               type='string'  />
+                <arg name='p_service_group'             type='string'  />
+                <arg name='p_url_service_prod'          type='string'  />
+                <arg name='p_url_service_test'          type='string'  />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!-- DEBUG                                                                   -->
+                <!-- ======================================================================= -->
+                <!-- fcm
+                <debug.on/>
+                -->
+                <set name='m_debug'><system.getDebug/></set>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <try>
+                    <body>
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <connection.begin/>
+
+                        <!-- ======================================================================= -->
+                        <!-- Cambia a estado: IP Proceso de entrega iniciado                         -->
+                        <!-- Cuando finalice la conexión WebService cambiará a: OK, FS o FC          -->
+                        <!--                                                                         -->
+                        <!-- status_message                                                          -->
+                        <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+                        <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                        <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                        <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+                        <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                        <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                        <!--     CA  Cancelado ( Cancelled )                                         -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <update table='cwsi_messages'>
+                            <column name='status_message'>IP</column>
+                            <column name='user_updated'><system.user.getCode/></column>
+                            <column name='date_updated'><date.current/></column>
+                            <where>
+                                   id_ws_request  = <p_id_ws_request/>
+                               AND status_message = 'UD'
+                            </where>
+                        </update>
+                        <if>
+                            <expr>
+                                <ne><sqlca.count/><number>1</number></ne>
+                            </expr>
+                            <then>
+                                <exception>Update error in [cwsi_messages] for request ID: [<cwsi_messages_id_ws_request/>] [<sqlca.count/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <!-- CLOB to STRING -->
+                        <set name='m_net_message_request'><string.getBytes><p_message_request/></string.getBytes></set>
+                        <!-- Suprimimos encoding -->
+                        <set name='m_net_message_request'><string.replaceAll><m_net_message_request/><string>\&lt;\?xml version="1.0" encoding="UTF-8"\?\&gt;</string><string/></string.replaceAll></set>
+                        <!-- Suprimimos Header -->
+                        <set name='m_net_message_request'><string.replaceAll><m_net_message_request/><string>\&lt;soapenv:Header\/\&gt;</string><string/></string.replaceAll></set>
+                        <!-- Suprimimos Body -->
+                        <set name='m_net_message_request'><string.replaceAll><m_net_message_request/><string>\&lt;soapenv:Body\&gt;</string><string/></string.replaceAll></set>
+                        <set name='m_net_message_request'><string.replaceAll><m_net_message_request/><string>\&lt;\/soapenv:Body\&gt;</string><string/></string.replaceAll></set>
+
+                        <!-- ======================================================================= -->
+                        <!-- DOM.PARSE                                                               -->
+                        <!-- ======================================================================= -->
+                        <set name='m_root'><dom.parse><m_net_message_request/></dom.parse></set>
+
+                        <!-- ======================================================================= -->
+                        <!-- Net message for tag soap.call                                           -->
+                        <!-- ======================================================================= -->
+                        <set name='m_message_for_soap_call'>
+                            <dom.element.getFirstChildElement>
+                                <m_root/>
+                            </dom.element.getFirstChildElement>
+                        </set>
+
+                        <!-- ======================================================================= -->
+                        <!-- URL END POINT                                                           -->
+                        <!-- ======================================================================= -->
+                        <set name='m_ns1'><null/></set>
+                        <set name='m_ns2'><null/></set>
+                        <set name='m_empcode'><null/></set>
+                        <set name='m_admon'><null/></set>
+                        <set name='m_keystorefile'><null/></set>
+                        <set name='m_keystorepassword'><null/></set>
+                        <set name='m_url_end_point'><null/></set>
+ 
+                        <!-- ======================================================================= -->
+                        <!-- Namespaces 1 y 2                                                        -->
+                        <!-- ======================================================================= -->
+                        <set name='m_ns1'>siiLR</set>
+                        <set name='m_ns2'>sii</set>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene la administración que ostenta la competencia inspectora.        -->
+                        <!-- ======================================================================= -->
+                        <select prefix='m_' required='Error registro es_sii_requests.id_ws_request = [${p_id_ws_request}]'>
+                            <columns>
+                                es_sii_requests.empcode, es_sii_requests.admon
+                            </columns>
+                            <from table='es_sii_requests' />
+                            <where>
+                                    es_sii_requests.id_ws_request = <p_id_ws_request/>
+                            </where>
+                        </select>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene credenciales                                                    -->
+                        <!-- ======================================================================= -->
+                        <call name='es_sii_get_key' into='m_channel_code, m_channel_name, m_keystorefile, m_keystorepassword'>
+                            <m_empcode/>
+                            <p_key_name/>       <!-- Nombre del fichero pfx. SII: NIF presentador, etc. -->
+                        </call>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene los END-POINTs de producción y test para la presentación en la  -->
+                        <!-- administración que tenga la competencia inspectora.                     -->
+                        <!-- ======================================================================= -->
+                        <call name='es_sii_get_end_points' into='p_url_service_prod, p_url_service_test'>
+                            <m_admon/>
+                            <p_url_service_prod/>
+                            <p_url_service_test/>
+                        </call>
+
+                        <!-- ======================================================================= -->
+                        <!-- es_sii_test_is_test:                                                    -->
+                        <!--    0 = Ya estamos en producción                                         -->
+                        <!--    1 = Estamos en test                                                  -->
+                        <!-- ======================================================================= -->
+                        <call name='es_sii_get_is_test' into='es_sii_test_is_test' />
+                        <if>
+                            <expr>
+                                <eq><es_sii_test_is_test/><number>0</number></eq>
+                            </expr>
+                            <then>
+                                <set name='m_url_end_point'><p_url_service_prod/></set>
+                                <set name='m_wm_test'><string/></set>
+                            </then>
+                            <else>
+                                <set name='m_url_end_point'><p_url_service_test/></set>
+                                <set name='m_wm_test'><string>TEST_</string></set>
+                            </else>
+                        </if>
+                        <if>
+                            <expr>
+                                <isnull><m_url_end_point/></isnull>
+                            </expr>
+                            <then>
+                                <exception>End Point not defined. See: [<p_id_ws_request/>] in [cwsi_messages].</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Adapta los ENDPOINTs ordinarios "www1." para el caso de requerir        -->
+                        <!-- el uso de certificados de sello "www10."                                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <string.matches><string.toLowerCase><m_channel_name/></string.toLowerCase><string>*certificado*sello*</string></string.matches>
+                            </expr>
+                            <then>
+                                <set name='m_url_end_point'>
+                                    <string.replaceAll><m_url_end_point/><string>www1\.</string><string>www10\.</string></string.replaceAll>
+                                </set>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Adapta los ENDPOINTs de sello "www10." para el caso de requerir         -->
+                        <!-- el uso de certificados ordnarios "www1."                                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <not><string.matches><string.toLowerCase><m_channel_name/></string.toLowerCase><string>*certificado*sello*</string></string.matches></not>
+                            </expr>
+                            <then>
+                                <set name='m_url_end_point'>
+                                    <string.replaceAll><m_url_end_point/><string>www10\.</string><string>www1\.</string></string.replaceAll>
+                                </set>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Get uri1 y uri2                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_uri1'>
+                            <dom.element.getAttribute attr='xmlns:${m_ns1}'>
+                                <m_root/>
+                            </dom.element.getAttribute>
+                        </set>
+                        <if>
+                            <expr>
+                                <and>
+                                    <isnotnull><m_ns1/></isnotnull>
+                                    <isnull><m_uri1/></isnull>
+                                </and>
+                            </expr>
+                            <then>
+                                <exception>URI notfound for namespace: [<m_ns1/>]. See: [<p_id_ws_request/>] in [cwsi_messages].</exception>
+                            </then>
+                        </if>
+                        <set name='m_uri2'>
+                            <dom.element.getAttribute attr='xmlns:${m_ns2}'>
+                                <m_root/>
+                            </dom.element.getAttribute>
+                        </set>
+                        <if>
+                            <expr>
+                                <and>
+                                    <isnotnull><m_ns2/></isnotnull>
+                                    <isnull><m_uri2/></isnull>
+                                </and>
+                            </expr>
+                            <then>
+                                <exception>URI notfound for namespace: [<m_ns2/>]. See: [<p_id_ws_request/>] in [cwsi_messages].</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <system.getDebug/>
+                            </expr>
+                            <then>
+                                <println>p_id_ws_request: [<p_id_ws_request/>]</println>
+                                <println>m_uri1: <m_ns1/>:[<m_uri1/>]<string.nl/>m_uri2: <m_ns2/>:[<m_uri2/>]<string.nl/></println>
+                                <println>m_url_end_point: [<m_url_end_point/>]</println>
+                                <println>m_keystorefile:  [<m_keystorefile/>]</println>
+                                m_url_end_point: [https://www7.aeat.es/wlpl/SSII-FACT/ws/fe/SiiFactFEV1SOAP]
+                                m_keystorefile:  [file:/home/axs/studio/tmp/axional-30845/XSQLScriptRunner/A08211989208399872375590165.pfx]
+                                <println>m_net_message_request: <string.nl/><m_net_message_request/></println>
+                                <println>m_message_for_soap_call: <variable.typeof><m_message_for_soap_call/></variable.typeof> <string.nl/>[<m_message_for_soap_call/>]</println>
+                                m_message_for_soap_call: org.apache.xerces.dom.DeferredElementImpl ..
+                            </then>
+                        </if>
+
+                        <!--
+                        Convert type java.lang.String  to  org.apache.xerces.dom.DeferredElementImpl
+                        -->
+                        <if>
+                            <expr>
+                                <eq><variable.typeof><m_message_for_soap_call/></variable.typeof><string>java.lang.String</string></eq>
+                            </expr>
+                            <then>
+                                <set name='m_message_for_soap_call'><dom.parse><m_message_for_soap_call/></dom.parse></set>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <include code='local_send_request' name='before_soap_call' />
+
+                        <!-- ======================================================================= -->
+                        <!-- Comprueba password                                                      -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnull><m_keystorepassword/></isnull>
+                            </expr>
+                            <then>
+                                <exception>Password not defined for [<p_key_name/>]. See: [<p_id_ws_request/>] in [cwsi_messages].</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Comprueba si existe el directorio /tmp                                  -->
+                        <!-- ======================================================================= -->
+                        <set name='m_work_dir'><add><file.separator/><string>tmp</string></add></set>
+                        <if>
+                            <expr>
+                                <not>
+                                    <file.exists>
+                                        <file name='${m_work_dir}' type='absolute' />
+                                    </file.exists>
+                                </not>
+                            </expr>
+                            <then>
+                                <exception>No existe el directorio: [<m_work_dir/>]. Se requiere un directorio de trabajo para backup en filesystem. ID: [<p_id_ws_request/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!--
+                            Lista de incidencias comunes:
+
+                            1) Certificado no encontrado:
+                                java.io.FileNotFoundException: /CERTS/03_A08066045z.pfx
+
+                            2) Password incorrecta:
+                            [SOAPException: faultCode=SOAP-ENV:Client; msg=Error SSL connecting to www7.aeat.es:443: java.io.IOException: keystore password was incorrect; targetException=java.io.IOException: keystore password was incorrect]
+
+                            3) Contenido incorrecto en fichero pfx:
+                                Error SSL connecting to www7.aeat.es:443: java.io.IOException: Integrity check failed: java.security.UnrecoverableKeyException: Failed PKCS12 integrity checking
+
+                            4) Servidor ausente:
+                            [SOAPException: faultCode=SOAP-ENV:Client; msg=Error parsing HTTP status line "": java.net.SocketException: Connection reset; targetException=java.net.SocketException: Connection reset]
+
+                            5) Error de conexión al servidor de la AEAT:
+                            <faultcode>env:Server</faultcode> <faultstring>Codigo[102].Conexión a Oracle no disponible.
+                        -->
+                        <!-- ======================================================================= -->
+                        <!--<set name='m_uri_keystorefile'><add><string>file:</string><m_keystorefile/></add></set>-->
+                        <!-- The same blob URL -->
+                        <try>
+                            <body>
+                                <set name='m_uri_keystorefile'><m_keystorefile/></set>
+
+                                <set name='m_resp'>
+                                    <soap.call
+                                        debug="${m_debug}"
+                                        url="${m_url_end_point}"
+                                        keyStoreFile="${m_uri_keystorefile}"
+                                        keyStorePassword="${m_keystorepassword}"
+                                        sendGzip="false"
+                                        encoding='NS_URI_LITERAL_XML'
+                                    >
+                                        <envelope>
+                                            <namespace prefix="${m_ns1}" uri="${m_uri1}" />
+                                            <namespace prefix="${m_ns2}" uri="${m_uri2}" />
+                                        </envelope>
+                                        <parameters>
+                                            <parameter>
+                                                <m_message_for_soap_call/>
+                                            </parameter>
+<!--
+                                            <parameter>
+                                                <dom.parse>
+<![CDATA[
+      <con:ConsultaLRFacturasEmitidas>
+         <sum:Cabecera>
+            <sum:IDVersionSii>0.6</sum:IDVersionSii>
+            <sum:Titular>
+               <sum:NombreRazon>FRANCESC CERVELLO MARTI</sum:NombreRazon>
+               <sum:NIF>39157672B</sum:NIF>
+            </sum:Titular>
+         </sum:Cabecera>
+         <con:FiltroConsulta>
+            <sum:PeriodoImpositivo>
+               <sum:Ejercicio>2015</sum:Ejercicio>
+               <sum:Periodo>01</sum:Periodo>
+            </sum:PeriodoImpositivo>
+         </con:FiltroConsulta>
+      </con:ConsultaLRFacturasEmitidas>
+]]>
+                                                </dom.parse>
+                                            </parameter>
+-->
+                                        </parameters>
+                                        <!-- SET REQ/RES BUFFERS -->
+                                        <requestCopy><stringBuilder name='m_request'/></requestCopy>
+                                        <responseCopy><stringBuilder name='m_response'/></responseCopy>
+                                    </soap.call>
+                                </set>
+                            </body>
+                            <catch>
+                                <!-- ======================================================================= -->
+                                <!-- Tratamiento exception generada en soap.call                             -->
+                                <!-- ======================================================================= -->
+
+                                <!-- ======================================================================= -->
+                                <!-- REGEXP:                                                                 -->
+                                <!--     Apply with Java modifiers:   (?ms)  m = MULTILINE  ;  s = DOTALL     -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr><string.regexp><error.message/><string>(?ms).*Se ha producido un error al verificar el certificado.*</string></string.regexp></expr>
+                                    <then>
+                                        <set name='m_error_message'>
+                                            <add>Error No autorizado for request: [<p_id_ws_request/>] in [cwsi_messages].<string.nl/>
+                                            Se ha producido un error al verificar el certificado presentado. Las causas más probables de este error son:<string.nl/>
+                                            1) El certificado no ha sido firmado por una autoridad reconocida.<string.nl/>
+                                            2) El tipo de certificado no es válido para el servicio al que se quiere acceder.<string.nl/>
+                                            3) El certificado ha expirado.<string.nl/>
+                                            Error original: [<error.message/>]<string.nl/>
+                                            </add>
+                                        </set>
+                                    </then>
+                                    <else>
+                                        <set name='m_error_message'><add>ERROR during the delivery process: [<error.message/>] for request: [<p_id_ws_request/>] in [cwsi_messages].</add></set>
+                                    </else>
+                                </if>
+                                <!-- ======================================================================= -->
+                                <!-- Log de debug                                                            -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <system.getDebug/>
+                                    </expr>
+                                    <then>
+                                        <println>======================= ERROR SOAP.CALL =========================</println>
+                                        <println>>>>>> REQUEST ID........: [<p_id_ws_request />]</println>
+                                        <println>>>>>> SOAP XML REQUEST..:<string.nl/><m_request /></println>
+                                        <println>>>>>> SOAP XML RESPONSE.:<string.nl/><m_response /></println>
+                                        <println>>>>>> ERROR MESSAGE.....:<string.nl/><m_error_message/></println>
+                                    </then>
+                                </if>
+                                <!-- ======================================================================= -->
+                                <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                                <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                                <!-- ======================================================================= -->
+                                <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                                <if>
+                                    <expr><m_is_batch_process/></expr>
+                                    <then>
+                                        <connection.rollback/>
+                                        <return><null/></return>
+                                    </then>
+                                    <else>
+                                        <exception><m_error_message/></exception>
+                                    </else>
+                                </if>
+                            </catch>
+                        </try>
+
+                        <!-- ======================================================================= -->
+                        <!-- Guarda el contendo de la respuesta para posterior cálculo del tamaño y  -->
+                        <!-- como medida de protección y backup por si se produce una excepción      -->
+                        <!-- antes de su registro en la tabla cwsi_messages                          -->
+                        <!-- ======================================================================= -->
+                        <set name='m_str_random' type='string'><math.trunc><mul><math.random/>10000000000</mul></math.trunc></set>
+                        <set name='m_backup_filename'>
+                            <add><m_work_dir/><file.separator/><string>es_sii_id_ws_request_</string><string.lpad><p_id_ws_request/><number>10</number><string>0</string></string.lpad><string>.response.</string><m_str_random/></add>
+                        </set>
+                        <try>
+                            <body>
+                                <file.bytes.write>
+                                    <file name='${m_backup_filename}'         type='absolute' />
+                                    <string.getBytes><dom.prettyPrint><dom.parse><m_response/></dom.parse></dom.prettyPrint></string.getBytes>
+                                </file.bytes.write>
+                            </body>
+                            <catch>
+                                <println>======================= ERROR WRITE BACKUP RESPONSE =========================</println>
+                                <println>>>>>> FILE_NAME.........: [<m_backup_filename />]</println>
+                                <println>>>>>> ERROR MESSAGE.....:<string.nl/><error.message/></println>
+                                <println>>>>>> REQUEST ID........: [<p_id_ws_request />]</println>
+                                <println>>>>>> SOAP XML REQUEST..:<string.nl/><m_request /></println>
+                                <println>>>>>> SOAP XML RESPONSE.:<string.nl/><m_response /></println>
+                                <!-- No exception !
+                                <exception>Cant write backup file: [<m_backup_filename/>] for message: [<p_id_ws_request/>]</exception>
+                                -->
+                            </catch>
+                        </try>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <connection.commit/>
+                    </body>
+                    <catch>
+                        <!-- ======================================================================= -->
+                        <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                        <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                        <!-- ======================================================================= -->
+                        <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                        <if>
+                            <expr><m_is_batch_process/></expr>
+                            <then>
+                                <connection.rollback/>
+                                <return><null/></return>
+                            </then>
+                            <else>
+                                <exception>Error during the delivery process: [<error.message/>] for request: [<p_id_ws_request/>] in [cwsi_messages].</exception>
+                            </else>
+                        </if>
+                    </catch>
+                </try>
+
+                <!-- ======================================================================= -->
+                <!-- Registra la respuesta en cwsi_messages                                  -->
+                <!-- ======================================================================= -->
+                <try>
+                    <body>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <connection.begin/>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr><soap.isFault><m_resp /></soap.isFault></expr>
+                            <then>
+                                <set name='m_message_response'><dom.prettyPrint><dom.parse><m_response/></dom.parse></dom.prettyPrint></set>
+                                <set name='m_fault_code'><soap.fault.getCode><m_resp /></soap.fault.getCode></set>
+                                <set name='m_fault_string'><soap.fault.getString><m_resp /></soap.fault.getString></set>
+                                <!-- ======================================================================= -->
+                                <!-- Log de debug if FaultCode                                               -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <system.getDebug/>
+                                    </expr>
+                                    <then>
+                                        <println>Fault Code....: <soap.fault.getCode><m_resp /></soap.fault.getCode></println>
+                                        <println>Fault String..: <soap.fault.getString><m_resp/></soap.fault.getString></println>
+                                        <iterator name='fe'>
+                                            <in>
+                                                <soap.fault.getFaultEntries><m_resp/></soap.fault.getFaultEntries>
+                                            </in>
+                                            <do>
+                                                <println>Fault Entries.: <fe/></println>
+                                            </do>
+                                        </iterator>
+                                        <iterator name='de'>
+                                            <in>
+                                                <soap.fault.getDetailedEntries><m_resp/></soap.fault.getDetailedEntries>
+                                            </in>
+                                            <do>
+                                                <println>Detail Entries.: <de/></println>
+                                            </do>
+                                        </iterator>
+                                    </then>
+                                </if>
+                            </then>
+                            <else>
+                                <set name='m_message_response'><dom.prettyPrint><m_resp/></dom.prettyPrint></set>
+                                <set name='m_fault_code'><null/></set>
+                                <set name='m_fault_string'><null/></set>
+                                <if>
+                                    <expr>
+                                        <system.getDebug/>
+                                    </expr>
+                                    <then>
+                                        <println>Formated Soap Response: </println>
+                                        <println><m_message_response/></println>
+                                    </then>
+                                </if>
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Log de debug                                                            -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <system.getDebug/>
+                            </expr>
+                            <then>
+                                <println>======================= REQUEST AND RESPONSE BUFFERS =========================</println>
+                                <println>>>>>> REQUEST ID........: [<p_id_ws_request />]</println>
+                                <println>>>>>> SOAP XML REQUEST..:<string.nl/><m_request /></println>
+                                <println>>>>>> SOAP XML RESPONSE.:<string.nl/><m_response /></println>
+                                <println>>>>>> M_MESSAGE_RESPONSE:<string.nl/><m_message_response /></println>
+                                <println>>>>>> M_FAULT_CODE......: [<m_fault_code />]</println>
+                                <println>>>>>> M_FAULT_STRING....: [<m_fault_string />]</println>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Cambia estado del mensaje.                                              -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnull><m_fault_code/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_status_message'>PD</set>              <!-- PD  No procesado / Pendiente digerir -->
+                            </then>
+                            <else>
+                                <!-- ==================================================================== -->
+                                <!-- faultcode                                                            -->
+                                <!--     SII AEAT devuelve:      env:Client                               -->
+                                <!--     SII Guipúzcoa devuelve: soap:Client                              -->
+                                <!-- ==================================================================== -->
+                                <set name='m_status_message'><null/></set>
+                                <set name='m_faultcode_type'><null/></set>
+                                <if>
+                                    <expr><string.regexp><m_fault_code/><string>.*:Server</string></string.regexp></expr>
+                                    <then>
+                                        <set name='m_status_message'>FS</set>
+                                        <set name='m_faultcode_type'>S</set>
+                                    </then>
+                                </if>
+                                <if>
+                                    <expr><string.regexp><m_fault_code/><string>.*:Client</string></string.regexp></expr>
+                                    <then>
+                                        <set name='m_status_message'>FC</set>
+                                        <set name='m_faultcode_type'>C</set>
+                                    </then>
+                                </if>
+                                <if>
+                                    <expr>
+                                        <isnull><m_faultcode_type/></isnull>
+                                    </expr>
+                                    <then>
+                                        <exception>Unexpected SOAPFault: [<m_fault_code/>] for message: [<p_id_ws_request/>]</exception>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Write SOAPFault                                                         -->
+                                <!-- ======================================================================= -->
+                                <insert table='cwsi_soapfaults' prepare-cache='true'>
+                                    <column name='id_ws_request'><p_id_ws_request/></column>
+                                    <column name='ts_reception'><date.current/></column>
+                                    <column name='faultcode'><m_faultcode_type/></column>
+                                    <column name='faultstring'><m_fault_string/></column>
+                                    <column name='callstack'><m_message_response/></column>
+                                </insert>
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Registra la respuesta y canvia status_message IP a PD, FS o FC          -->
+                        <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                        <!-- Canvia a:                                                               -->
+                        <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                        <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                        <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <update table='cwsi_messages'>
+                            <column name='response_size'><number>-1</number></column>
+                            <column name='message_response'><string.getBytes><m_message_response/></string.getBytes></column>
+                            <column name='status_message'><m_status_message/></column>
+                            <!-- Marca de envio a servidor de pruebas: -->
+                            <column name='user_created' text='true'>
+                                CASE WHEN user_created NOT LIKE '${m_wm_test}' || '%' THEN '${m_wm_test}' || TRIM(user_created) ELSE user_created END
+                            </column>
+                            <column name='user_updated'><system.user.getCode/></column>
+                            <column name='date_updated'><date.current/></column>
+                            <where>
+                                   id_ws_request  = <p_id_ws_request/>
+                               AND status_message = 'IP'                    <!-- IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                               <!-- AND status_message = 'UD'                    UD  Pendiente entregar el mensaje ( Undelivered ) -->
+                            </where>
+                        </update>
+                        <if>
+                            <expr>
+                                <ne><sqlca.count/><number>1</number></ne>
+                            </expr>
+                            <then>
+                                <exception>Update error in [cwsi_messages] for request ID: [<p_id_ws_request/>] [<sqlca.count/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <connection.commit/>
+
+                    </body>
+                    <catch>
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <println>======================= ERROR WRITE RESPONSE IN [cwsi_messages] =========================</println>
+                        <println>>>>>> FILE_NAME.........: [<m_backup_filename />]</println>
+                        <println>>>>>> ERROR MESSAGE.....:<string.nl/><error.message/></println>
+                        <println>>>>>> REQUEST ID........: [<p_id_ws_request />]</println>
+                        <println>>>>>> SOAP XML REQUEST..:<string.nl/><m_request /></println>
+                        <println>>>>>> SOAP XML RESPONSE.:<string.nl/><m_response /></println>
+
+                        <!-- ======================================================================= -->
+                        <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                        <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                        <!-- ======================================================================= -->
+                        <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                        <if>
+                            <expr><m_is_batch_process/></expr>
+                            <then>
+                                <connection.rollback/>
+                                <return><null/></return>
+                            </then>
+                            <else>
+                                <exception>Unexpected error. Cant write response message in [cwsi_messages] for ID: [<p_id_ws_request/>]. <string.nl/>Search response file in [m_backup_filename]. <string.nl/>Error message: [<error.message/>]</exception>
+                            </else>
+                        </if>
+                    </catch>
+                </try>
+
+                <!-- ======================================================================= -->
+                <!-- Registra el tamaño de la respuesta en un segundo update para minimizar  -->
+                <!-- riesgo de error.                                                        -->
+                <!-- ======================================================================= -->
+                <try>
+                    <body>
+                        <connection.begin/>
+                        <set name='m_response_size'>
+                            <file.length><file name='${m_backup_filename}' type='absolute' /></file.length>
+                        </set>
+                        <update table='cwsi_messages'>
+                            <column name='response_size'><m_response_size/></column>
+                            <where>
+                                   id_ws_request  = <p_id_ws_request/>
+                            </where>
+                        </update>
+                        <connection.commit/>
+                    </body>
+                    <catch>
+                        <println>======================= ERROR WRITE RESPONSE FILE SIZE IN [cwsi_messages] =========================</println>
+                        <println>>>>>> REQUEST ID........: [<p_id_ws_request />]</println>
+                        <!-- ======================================================================= -->
+                        <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                        <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                        <!-- ======================================================================= -->
+                        <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                        <if>
+                            <expr><m_is_batch_process/></expr>
+                            <then>
+                                <connection.rollback/>
+                                <return><null/></return>
+                            </then>
+                            <else>
+                                <exception>Unexpected error. Cant write response file size in [cwsi_messages] for ID: [<p_id_ws_request/>]. <string.nl/>Search response file in [m_backup_filename]. <string.nl/>Error message: [<error.message/>]</exception>
+                            </else>
+                        </if>
+                    </catch>
+                </try>
+
+                <!-- ======================================================================= -->
+                <!-- Elimina el fichero de backup del filesystem                             -->
+                <!-- ======================================================================= -->
+                <try>
+                    <body>
+                        <set name='m_status_delete'>
+                            <file.delete>
+                                <file name='${m_backup_filename}' type='absolute' />
+                            </file.delete>
+                        </set>
+                        <if>
+                            <expr>
+                                <ne><m_status_delete/><number>1</number></ne>
+                            </expr>
+                            <then>
+                                <!-- ======================================================================= -->
+                                <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                                <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                                <!-- ======================================================================= -->
+                                <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                                <if>
+                                    <expr><m_is_batch_process/></expr>
+                                    <then>
+                                        <return><null/></return>
+                                    </then>
+                                    <else>
+                                        <exception>Delete operation failed for: [<m_backup_filename/>]</exception>
+                                    </else>
+                                </if>
+                            </then>
+                        </if>
+                    </body>
+                    <catch/>
+                </try>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return>
+                    <m_status_message/>
+                </return>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNCTION: local_digest_response                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_digest_response'>
+            <args>
+                <arg name='p_str_query'        type='string' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!-- Digest messages                                                         -->
+                <!--                                                                         -->
+                <!-- status_message                                                          -->
+                <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+                <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+                <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                <!--     CA  Cancelado ( Cancelled )                                         -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <foreach>
+                    <select prefix='cwsi_messages_' secure='true' >
+                        <columns>
+                            *
+                        </columns>
+                        <from table='cwsi_messages' />
+                        <where>
+                                <p_str_query mode='unquoted'/>
+                            AND status_message = 'PD'
+                        </where>
+                        <order>id_ws_request</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <try>
+                            <body>
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <connection.begin/>
+
+                                <!-- ======================================================================= -->
+                                <!-- Digest WebService message                                               -->
+                                <!--                                                                         -->
+                                <!-- status_message                                                          -->
+                                <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+                                <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                                <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                                <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+                                <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                                <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                                <!--     CA  Cancelado ( Cancelled )                                         -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <update table='cwsi_messages'>
+                                    <column name='status_message'>OK</column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                           id_ws_request  = <cwsi_messages_id_ws_request/>
+                                       AND status_message = 'PD'
+                                    </where>
+                                </update>
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <exception>Update error in [cwsi_messages] for request ID: [<cwsi_messages_id_ws_request/>] [<sqlca.count/>]</exception>
+                                    </then>
+                                </if>
+
+                                <!-- ==================================================================== -->
+                                <!-- Libros registro módulo ES_SII:                                       -->
+                                <!--     FE  Facturas Emitidas                                            -->
+                                <!--     FE  Facturas Recibidas                                           -->
+                                <!--     CE  Cobros facturas Emitidas (RECC Régimen Especial Criterio de Caja) -->
+                                <!--     PR  Pagos facturas Recibidas (RECC Régimen Especial Criterio de Caja) -->
+                                <!--     BI  Bienes de Inversión                                          -->
+                                <!--     CM  Cobros en Metálico                                           -->
+                                <!--     OS  Operaciones de Seguros                                       -->
+                                <!--     IA  Inmuebles adicionales                                        -->
+                                <!-- ==================================================================== -->
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRFE*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRFR*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRCE*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRPR*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRBI*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRCM*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LROS*</string></string.matches>
+                                            <string.matches><cwsi_messages_method_code/><string>ES_SII_LRIA*</string></string.matches>                                            
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <!-- ======================================================================= -->
+                                        <!-- Digest WebService message                                               -->
+                                        <!-- ======================================================================= -->
+                                        <local_es_sii_dr_lr>
+                                            <cwsi_messages_id_ws_request/>
+                                            <cwsi_messages_method_code/>
+                                            <cwsi_messages_message_response/>
+                                        </local_es_sii_dr_lr>
+                                    </then>
+                                    <else>
+                                        <exception>Método [<cwsi_messages_method_code/>] no soportado. Id.: [<cwsi_messages_id_ws_request/>]</exception>
+                                    </else>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <connection.commit/>
+                            </body>
+                            <catch>
+                                <!-- ======================================================================= -->
+                                <!-- Si m_is_batch_process: true  = Captura error: Rollback y continua.      -->
+                                <!-- Si m_is_batch_process: false = Genera EXCEPTION y detiene flujo.        -->
+                                <!-- ======================================================================= -->
+                                <set name='m_is_batch_process'><global.get name='g_es_sii_is_batch_process'/></set>
+                                <if>
+                                    <expr><m_is_batch_process/></expr>
+                                    <then>
+                                        <connection.rollback/>
+                                        <foreach.continue/>
+                                    </then>
+                                    <else>
+                                        <exception>Error: [<error.message/>] for message: [<cwsi_messages_id_ws_request/>]</exception>
+                                    </else>
+                                </if>
+                            </catch>
+                        </try>
+
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNCTION: local_es_sii_dr_lr                                            -->
+        <!--     dr = Digest Response                                                -->
+        <!-- Procesa la respuesta recibida del sistema SII.                          -->
+        <!-- ======================================================================= -->
+        <function name='local_es_sii_dr_lr'>
+            <args>
+                <arg name='p_id_ws_request'           type='integer' />
+                <arg name='p_method_code'             type='string'  />
+                <arg name='p_message_response'                       />
+            </args>
+            <body>
+
+                <!-- ==================================================================== -->
+                <!-- Ej.: ES_SII_LRFES = FE                                               -->
+                <!-- ==================================================================== -->
+                <set name='m_libro'><string.substring><p_method_code/><number>9</number><number>11</number></string.substring></set>
+
+                <!-- ==================================================================== -->
+                <!--                                                                      -->
+                <!-- ==================================================================== -->
+                <select prefix='es_sii_requests_' required='Registro no encontrado [${p_id_ws_request}]'>
+                    <columns>
+                        *
+                    </columns>
+                    <from table='es_sii_requests' />
+                    <where>
+                            id_ws_request = <p_id_ws_request/>
+                        AND method_code   = <p_method_code/>
+                        AND estadoenvio   = '0'
+                    </where>
+                </select>
+
+                <!-- ==================================================================== -->
+                <!--                                                                      -->
+                <!-- ==================================================================== -->
+                <select prefix='m_' required='Registro no encontrado [${p_method_code}]'>
+                    <columns>
+                        method_name
+                    </columns>
+                    <from table='cwsi_methods' />
+                    <where>
+                            method_code   = <p_method_code/>
+                    </where>
+                </select>
+
+                <!-- ==================================================================== -->
+                <!-- Etiqueta principal según la operación                                -->
+                <!-- ==================================================================== -->
+                <set name='m_main_tag_resp'><null/></set>
+
+                <!-- Determina tag respuesta si Suministro -->
+                <if>
+                    <expr>
+                        <string.matches><m_method_name/><string>SuministroLR*</string></string.matches>
+                    </expr>
+                    <then>
+                        <set name='m_main_tag_resp'>
+                            <string.replaceAll>
+                                <m_method_name/>
+                                <string>SuministroLR</string>
+                                <string>siiR:RespuestaLR</string>
+                            </string.replaceAll>
+                        </set>
+                    </then>
+                </if>
+
+                <!-- Determina tag respuesta si Anulacion -->
+                <if>
+                    <expr>
+                        <string.matches><m_method_name/><string>AnulacionLR*</string></string.matches>
+                    </expr>
+                    <then>
+                        <set name='m_main_tag_resp'>
+                            <string.replaceAll>
+                                <m_method_name/>
+                                <string>AnulacionLR</string>
+                                <string>siiR:RespuestaLRBaja</string>
+                            </string.replaceAll>
+                        </set>
+                    </then>
+                </if>
+                <if>
+                    <expr>
+                        <isnull><m_main_tag_resp/></isnull>
+                    </expr>
+                    <then>
+                        <exception>Operación [<cwsi_messages_method_code/>] no prevista. Identificador: [<p_id_ws_request/>]</exception>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- Prepara JSON para extracción de contenidos.                          -->
+                <!-- ==================================================================== -->
+                <set name='m_json'>
+                    <json.fromXML>
+                        <dom.parse>
+                            <p_message_response />
+                        </dom.parse>
+                    </json.fromXML>
+                </set>
+
+                <!-- ==================================================================== -->
+                <!-- IDVersionSii                                                         -->
+                <!-- ==================================================================== -->
+                <set name='m_idversionsii'><ifnull><json.get name='${m_main_tag_resp}.siiR:Cabecera.sii:IDVersionSii'><m_json /></json.get><string/></ifnull></set>
+                <if>
+                    <expr>
+                        <ne><m_idversionsii/><es_sii_requests_idversionsii/></ne>
+                    </expr>
+                    <then>
+                        <exception>La versión SII [<m_idversionsii/>] no coincide con la versión del mensaje [<es_sii_requests_idversionsii/>]. Ver identificador [<p_id_ws_request/>].</exception>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- Cabecera.Titular.NIF                                                 -->
+                <!-- ==================================================================== -->
+                <set name='m_niftitular'><ifnull><json.get name='${m_main_tag_resp}.siiR:Cabecera.sii:Titular.sii:NIF'><m_json /></json.get><string/></ifnull></set>
+                <if>
+                    <expr>
+                        <eq><string.length><m_niftitular/></string.length>0</eq>
+                    </expr>
+                    <then>
+                        <exception>El NIF del titular no se ha informado en el TAG [siiR:Cabecera.sii:Titular.NIF]. Ver identificador [<p_id_ws_request/>].</exception>
+                    </then>
+                </if>
+
+                <if>
+                    <expr>
+                        <ne><m_niftitular/><es_sii_requests_niftitular/></ne>
+                    </expr>
+                    <then>
+                        <exception>El NIF del titular [<m_niftitular/>] no coincide con el NIF del titular del mensaje [<es_sii_requests_niftitular/>]. Ver identificador [<p_id_ws_request/>].</exception>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- Suministros Alta o Modificación                                      -->
+                <!-- La etiqueta TipoComunicacion solo se devuelve en las respuestas de   -->
+                <!-- los mensajes de Suministros excepto los mensajes:                    -->
+                <!--     ES_SII_LRCES   SuministroCobrosEmitidas                          -->
+                <!--     ES_SII_LRPRS   SuministroPagosRecibidas                          -->
+                <!-- ==================================================================== -->
+                <if>
+                    <expr>
+                        <and>
+                            <string.regexp><p_method_code/><string>ES_SII_LR.*S</string></string.regexp>
+                            <ne><p_method_code /><string>ES_SII_LRIAS</string></ne>                            
+                            <not><string.regexp><p_method_code/><string>(ES_SII_LRCES|ES_SII_LRPRS)</string></string.regexp></not>
+                        </and>
+                    </expr>
+                    <then>
+                        <!-- ==================================================================== -->
+                        <!-- TipoComunicacion                                                     -->
+                        <!-- ==================================================================== -->
+                        <set name='m_tipocomunicacion'><ifnull><json.get name='${m_main_tag_resp}.siiR:Cabecera.sii:TipoComunicacion'><m_json /></json.get><string/></ifnull></set>
+                        <if>
+                            <expr>
+                                <ne><m_tipocomunicacion/><es_sii_requests_tipocomunicacion/></ne>
+                            </expr>
+                            <then>
+                                <exception>La clave de comunicación [<m_tipocomunicacion/>] no coincide con la del mensaje [<es_sii_requests_tipocomunicacion/>]. Ver identificador [<p_id_ws_request/>].</exception>
+                            </then>
+                        </if>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- EstadoEnvio                                                          -->
+                <!-- ==================================================================== -->
+                <set name='m_estadoenvio'><json.get name='${m_main_tag_resp}.siiR:EstadoEnvio'><m_json /></json.get></set>
+                <if>
+                    <expr>
+                        <isnull><m_estadoenvio/></isnull>
+                    </expr>
+                    <then>
+                        <exception>Etiqueta [estadoenvio] no encontrada en el mensaje. Ver identificador [<p_id_ws_request/>].</exception>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- Si EstadoEnvio = Incorrecto                                          -->
+                <!-- ==================================================================== -->
+                <set name='m_csv'><string>-</string></set>
+                <set name='m_date_updated'><date.current/></set>
+                <set name='m_timestamppresentacion'><m_date_updated/></set>
+                <if>
+                    <expr>
+                        <ne><m_estadoenvio/>Incorrecto</ne>
+                    </expr>
+                    <then>
+                        <!-- ==================================================================== -->
+                        <!-- NIFPresentador                                                       -->
+                        <!-- ==================================================================== -->
+                        <set name='m_nifpresentador'><ifnull><json.get name='${m_main_tag_resp}.siiR:DatosPresentacion.sii:NIFPresentador'><m_json /></json.get><string/></ifnull></set>
+                        <if>
+                            <expr>
+                                <ne><m_nifpresentador/><es_sii_requests_nifpresentador/></ne>
+                            </expr>
+                            <then>
+                                <exception>El NIF del presentador [<m_nifpresentador/>] no coincide con la clave del mensaje [<es_sii_requests_nifpresentador/>]. Ver identificador [<p_id_ws_request/>].</exception>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- CSV                                                                  -->
+                        <!-- ==================================================================== -->
+                        <set name='m_csv'><json.get name='${m_main_tag_resp}.siiR:CSV'><m_json /></json.get></set>
+                        <if>
+                            <expr>
+                                <isnull><m_csv/></isnull>
+                            </expr>
+                            <then>
+                                <exception>CSV no encontrado para el libro registro [<p_method_code/>]. Ver identificador [<p_id_ws_request/>].</exception>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- TimestampPresentacion                                                -->
+                        <!-- ==================================================================== -->
+                        <set name='m_timestamppresentacion' type='timestamp'><ifnull><json.get name='${m_main_tag_resp}.siiR:DatosPresentacion.sii:TimestampPresentacion'><m_json /></json.get><string/></ifnull></set>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- es_sii_requests                                                      -->
+                <!-- ==================================================================== -->
+                <update table='es_sii_requests'>
+                    <column name='estadoenvio' text='true'>
+                        CASE WHEN UPPER(<m_estadoenvio/>) = 'CORRECTO'             THEN '1'
+                             WHEN UPPER(<m_estadoenvio/>) = 'PARCIALMENTECORRECTO' THEN '2'
+                             WHEN UPPER(<m_estadoenvio/>) = 'INCORRECTO'           THEN '3'
+                             ELSE '9'   <!-- No previsto ! -->
+                         END
+                    </column>
+                    <column name='csv'><m_csv/></column>
+                    <column name='ts_presentacion'><m_timestamppresentacion/></column>
+                    <column name='user_updated'><system.user.getCode/></column>
+                    <column name='date_updated'><m_date_updated/></column>
+                    <where>
+                            id_ws_request = <p_id_ws_request/>
+                        AND estadoenvio   = '0'     <!-- No entregado a SII -->
+                    </where>
+                </update>
+                <if>
+                    <expr>
+                        <ne><sqlca.count/><number>1</number></ne>
+                    </expr>
+                    <then>
+                        <exception>Update error in [es_sii_requests] for request ID: [<p_id_ws_request/>] [<sqlca.count/>]</exception>
+                    </then>
+                </if>
+
+                <!-- ==================================================================== -->
+                <!-- Ejemplos RespuestaLRFacturasEmitidas                                  -->
+                <!-- ==================================================================== -->
+<!--
+Ejemplo 1 - EstadoEnvio = Correcto
+
+<siiR:RespuestaLRFacturasEmitidas xmlns:siiR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/RespuestaSuministro.xsd" xmlns:sii="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroInformacion.xsd">
+   <siiR:CSV>3RT7SVUHPD5AUQ6B</siiR:CSV>
+   <siiR:DatosPresentacion>
+      <sii:NIFPresentador>A08211989</sii:NIFPresentador>
+      <sii:TimestampPresentacion>02-04-2017 19:51:27</sii:TimestampPresentacion>
+   </siiR:DatosPresentacion>
+   <siiR:Cabecera>
+      <sii:IDVersionSii>0.6</sii:IDVersionSii>
+      <sii:Titular>
+         <sii:NombreRazon>Rhenus Logistics, S.A.U.</sii:NombreRazon>
+         <sii:NIF>A08211989</sii:NIF>
+      </sii:Titular>
+      <sii:TipoComunicacion>A1</sii:TipoComunicacion>
+   </siiR:Cabecera>
+   <siiR:EstadoEnvio>Correcto</siiR:EstadoEnvio>
+   <siiR:RespuestaLinea>
+      <siiR:IDFactura>
+         <sii:IDEmisorFactura>
+            <sii:NIF>A08211989</sii:NIF>
+         </sii:IDEmisorFactura>
+         <sii:NumSerieFacturaEmisor>36CA/0000540</sii:NumSerieFacturaEmisor>
+         <sii:FechaExpedicionFacturaEmisor>01-01-2017</sii:FechaExpedicionFacturaEmisor>
+      </siiR:IDFactura>
+      <siiR:EstadoRegistro>Correcto</siiR:EstadoRegistro>
+   </siiR:RespuestaLinea>
+</siiR:RespuestaLRFacturasEmitidas>
+
+Ejemplo 2 - EstadoEnvio = Incorrecto
+<siiR:RespuestaLRFacturasEmitidas xmlns:siiR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/RespuestaSuministro.xsd" xmlns:sii="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/ssii/fact/ws/SuministroInformacion.xsd">
+   <siiR:Cabecera>
+      <sii:IDVersionSii>0.6</sii:IDVersionSii>
+      <sii:Titular>
+         <sii:NombreRazon>Rhenus Logistics, S.A.U.</sii:NombreRazon>
+         <sii:NIF>A08211989</sii:NIF>
+      </sii:Titular>
+      <sii:TipoComunicacion>A0</sii:TipoComunicacion>
+   </siiR:Cabecera>
+   <siiR:EstadoEnvio>Incorrecto</siiR:EstadoEnvio>
+   <siiR:RespuestaLinea>
+      <siiR:IDFactura>
+         <sii:IDEmisorFactura>
+            <sii:NIF>A08211989</sii:NIF>
+         </sii:IDEmisorFactura>
+         <sii:NumSerieFacturaEmisor>HMD-037001</sii:NumSerieFacturaEmisor>
+         <sii:FechaExpedicionFacturaEmisor>09-01-2017</sii:FechaExpedicionFacturaEmisor>
+      </siiR:IDFactura>
+      <siiR:EstadoRegistro>Incorrecto</siiR:EstadoRegistro>
+      <siiR:CodigoErrorRegistro>3000</siiR:CodigoErrorRegistro>
+      <siiR:DescripcionErrorRegistro>Factura duplicada</siiR:DescripcionErrorRegistro>
+   </siiR:RespuestaLinea>
+</siiR:RespuestaLRFacturasEmitidas>
+-->
+
+                <!-- ==================================================================== -->
+                <!-- siiR:RespuestaLinea                                                  -->
+                <!-- ==================================================================== -->
+                <iterator name='m_rlinea'>
+                    <in>
+                        <json.getArray name='${m_main_tag_resp}.siiR:RespuestaLinea'><m_json /></json.getArray>
+                    </in>
+                    <do>
+                        <set name='m_base_tag_nif'><null/></set>
+                        <!-- ==================================================================== -->
+                        <!-- Encaminamiento para obtener el NIF del emisor de la factura para     -->
+                        <!-- libros:                                                              -->
+                        <!--    FE Facturas Emitidas                                              -->
+                        <!--    FR Facturas Recibidas                                             -->
+                        <!--    CE Cobros facturas Emitidas                                       -->
+                        <!--    PR Pagos facturas Recibidas                                       -->
+                        <!--    BI Bienes de Inversión                                            -->
+                        <!--    IA Inmuebles adicionales                                          -->                        
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(FE|FR|CE|PR|BI|IA)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_base_tag_nif'><string>siiR:IDFactura.sii:IDEmisorFactura</string></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Encaminamiento para obtener el NIF de la Contraparte para libros:    -->
+                        <!--    CM Cobros en Metálico                                             -->
+                        <!--    OS Operaciones de Seguros                                         -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(CM|OS)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_base_tag_nif'><string>siiR:Contraparte</string></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Encaminamiento nulo                                                  -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <isnull><m_base_tag_nif/></isnull>
+                            </expr>
+                            <then>
+                                <exception>El encaminamiento para obtener el nif no está definido. Revise el libro [<m_libro/>] ID: [<p_id_ws_request/>] [<sqlca.count/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Get NIF                                                              -->
+                        <!-- ==================================================================== -->
+                        <set name='m_nif'><json.get  name='${m_base_tag_nif}.sii:NIF'><m_rlinea /></json.get ></set>
+
+                        <!-- Si NIF es nulo se asume que es NIF extranjero -->
+                        <if>
+                            <expr>
+                                <isnull><m_nif/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_codigopais'><json.get  name='${m_base_tag_nif}.sii:IDOtro.sii:CodigoPais'><m_rlinea /></json.get ></set>
+                                <set name='m_idtype'><json.get  name='${m_base_tag_nif}.sii:IDOtro.sii:IDType'><m_rlinea /></json.get ></set>
+                                <set name='m_id'><json.get  name='${m_base_tag_nif}.sii:IDOtro.sii:ID'><m_rlinea /></json.get ></set>
+                                <!-- Los NIFs intracomunitarios implementan el código de país (coda2) en el NIF ( m_id ) -->
+                                <!-- 02 NIF-IVA ( intracomunitario ! )                                                   -->
+                                <if>
+                                    <expr>
+                                        <eq><m_idtype/><string>02</string></eq>
+                                    </expr>
+                                    <then>
+                                        <set name='m_nif'><m_id/></set>
+                                    </then>
+                                </if>
+                                <!-- ======================================================================= -->
+                                <!-- Obtiene NIF, País, idtype, etc.                                         -->
+                                <!-- IDType                                                                  -->
+                                <!-- L4 Tipos de Identificación en el país de residencia  (Pag 71)           -->
+                                <!--    Excepto: 02 NIF-IVA                                                  -->
+                                <!--    03 PASAPORTE                                                         -->
+                                <!--    04 DOCUMENTO OFICIAL DE IDENTIFICACIÓN EXPEDIDO POR EL PAIS O TERRITORIO DE RESIDENCIA -->
+                                <!--    05 CERTIFICADO DE RESIDENCIA                                         -->
+                                <!--    06 OTRO DOCUMENTO PROBATORIO                                         -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <and>
+                                            <ne><m_idtype/><string>02</string></ne>
+                                            <isnotnull><m_codigopais/></isnotnull>
+                                            <gt><string.length><m_id/></string.length>2</gt>
+                                            <not><string.regexp><m_id/><string>[A-Z]{2,2}</string></string.regexp></not>
+                                        </and>
+                                    </expr>
+                                    <then>
+                                        <set name='m_nif'><add><m_codigopais/><m_id/></add></set>
+                                    </then>
+                                </if>
+                                <if>
+                                    <expr>
+                                        <isnull><m_nif/></isnull>
+                                    </expr>
+                                    <then>
+                                        <exception>nif IS NULL. Es extranjero!  ID: [<p_id_ws_request/>] [<sqlca.count/>]</exception>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Libros que requieren:                                                -->
+                        <!--    NumSerieFacturaEmisor                                             -->
+                        <!--    FechaExpedicionFacturaEmisor                                      -->
+                        <!--                                                                      -->
+                        <!--    FE Facturas Emitidas                                              -->
+                        <!--    FR Facturas Recibidas                                             -->
+                        <!--    CE Cobros facturas Emitidas                                       -->
+                        <!--    PR Pagos facturas Recibidas                                       -->
+                        <!--    BI Bienes de Inversión                                            -->
+                        <!--    IA Inmuebles Adicionales                                          -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(FE|FR|CE|PR|BI|IA)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_numseriefacturaemisor'><json.get name='siiR:IDFactura.sii:NumSerieFacturaEmisor'><m_rlinea /></json.get></set>
+                                <set name='m_fechaexpedicionfacturaemisor' type='date'><json.get name='siiR:IDFactura.sii:FechaExpedicionFacturaEmisor'><m_rlinea /></json.get></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Libros que requieren:                                                -->
+                        <!--    Ejercicio                                                         -->
+                        <!--    Periodo                                                           -->
+                        <!--                                                                      -->
+                        <!--    BI Bienes de Inversión                                            -->
+                        <!--    CM Cobros en Metálico                                             -->
+                        <!--    OS Operaciones de Seguros                                         -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(BI|CM|OS)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_ejercicio'><json.get name='siiR:PeriodoLiquidacion.siiR:Ejercicio'><m_rlinea /></json.get></set>
+                                <set name='m_periodo' type='string'><json.get name='siiR:PeriodoLiquidacion.siiR:Periodo'><m_rlinea /></json.get></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- Get EstadoRegistro                                                   -->
+                        <!-- ==================================================================== -->
+                        <set name='m_estadoregistro'><json.get name='siiR:EstadoRegistro'><m_rlinea /></json.get></set>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_facturas                                                      -->
+                        <!--    FE Facturas Emitidas                                              -->
+                        <!--    FR Facturas Recibidas                                             -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(FE|FR)</string></string.regexp>
+                            </expr>
+                            <then>
+
+                                <update table='es_sii_facturas'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular />
+                                        AND idemisor         = <m_nif/>
+                                        AND numfactura       = <m_numseriefacturaemisor/>
+                                        AND fechafactura     = <m_fechaexpedicionfacturaemisor/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </update>
+
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <!-- ==================================================================== -->
+                                        <!-- Cuidado con los blancos a izquierda del número de la factura, la     -->
+                                        <!-- AEAT los suprime y esto causa que la factura no sea detectada por la -->
+                                        <!-- operación de update realizada en las líneas precedentes.             -->
+                                        <!-- Para evitar el problema se ha instalado el check c_cimpcont_head1 en -->
+                                        <!-- la tabla cimpcont_head SUBSTR(docser, 1, 1) != ' '                   -->
+                                        <!-- ==================================================================== -->
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Update error in [es_sii_facturas] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_facturas                                                      -->
+                        <!--    IA Impuestos adicionales                                          -->
+                        <!-- ==================================================================== -->                        
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(IA)</string></string.regexp>
+                            </expr>
+                            <then>
+
+                                <update table='es_sii_facturas'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado_refcat15' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular/>
+                                        AND idemisor         = <m_nif/>
+                                        AND numfactura       = <m_numseriefacturaemisor/>
+                                        AND fechafactura     = <m_fechaexpedicionfacturaemisor/>
+                                        AND id_ws_request_refcat15 = <p_id_ws_request/>
+                                    </where>
+                                </update>
+
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <!-- ==================================================================== -->
+                                        <!-- Cuidado con los blancos a izquierda del número de la factura, la     -->
+                                        <!-- AEAT los suprime y esto causa que la factura no sea detectada por la -->
+                                        <!-- operación de update realizada en las líneas precedentes.             -->
+                                        <!-- Para evitar el problema se ha instalado el check c_cimpcont_head1 en -->
+                                        <!-- la tabla cimpcont_head SUBSTR(docser, 1, 1) != ' '                   -->
+                                        <!-- ==================================================================== -->
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Update error in [es_sii_facturas] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>                                
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_pagos                                                         -->
+                        <!--    CE Cobros facturas Emitidas                                       -->
+                        <!--    PR Pagos facturas Recibidas                                       -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(CE|PR)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <!-- A partir del identificador de la factura obtiene el valor de head_seqno -->
+                                <select prefix='m_'>
+                                    <columns>head_seqno</columns>
+                                    <from table='es_sii_facturas' />
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular/>
+                                        AND libro            = (CASE WHEN <m_libro/> = 'CE' THEN 'FE' ELSE 'FR' END)
+                                        AND idemisor         = <m_nif/>
+                                        AND numfactura       = <m_numseriefacturaemisor/>
+                                        AND fechafactura     = <m_fechaexpedicionfacturaemisor/>
+                                        AND erp_estado       = 'E'     <!-- Mensaje Entregado  -->
+                                        AND sii_estado       = '1'     <!-- Respuesta Correcta -->
+                                        AND tipocomunicacion != 'B'    <!-- No es Baja         -->
+                                    </where>
+                                </select>
+                                <if>
+                                    <expr>
+                                        <isnull><m_head_seqno/></isnull>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>]</string></set>
+                                        <exception>Factura no encontrada en [es_sii_facturas] ID: [<p_id_ws_request/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <!-- Atención se modifican todos los pagos de una misma factura de la  solicitud ! -->
+                                <update table='es_sii_pagos'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                            head_seqno       = <m_head_seqno/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </update>
+                                <if>
+                                    <expr>
+                                        <eq><sqlca.count/><number>0</number></eq>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>]</string></set>
+                                        <exception>Update error in [es_sii_pagos] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <!-- ==================================================================== -->
+                                <!-- Backup identificador para registrar error en es_sii_requests_error   -->
+                                <!-- ==================================================================== -->
+                                <set name='es_sii_requests_error_seqno'><m_head_seqno/></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_bienes_inversion                                              -->
+                        <!--    BI Bienes de Inversión                                            -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(BI)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_identificacionbien'><json.get name='siiR:IdentificacionBien'><m_rlinea /></json.get></set>
+                                <!-- A partir del identificador del registro obtiene el valor de head_seqno -->
+                                <select prefix='m_'>
+                                    <columns>seqno</columns>
+                                    <from table='es_sii_bienes_inversion' />
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular/>
+                                        AND ejercicio        = <m_ejercicio/>
+                                        AND periodo          = <m_periodo/>
+                                        AND idemisor         = <m_nif/>
+                                        AND numfactura       = <m_numseriefacturaemisor/>
+                                        AND fechafactura     = <m_fechaexpedicionfacturaemisor/>
+                                        AND id_bien          = <m_identificacionbien/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </select>
+                                <if>
+                                    <expr>
+                                        <isnull><m_seqno/></isnull>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>] <string.nl/>Identificador bien: [<m_identificacionbien/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Bien de inversión no encontrado en [es_sii_bienes_inversion] ID: [<p_id_ws_request/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <update table='es_sii_bienes_inversion'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                            seqno            = <m_seqno/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </update>
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <!-- ==================================================================== -->
+                                        <!-- Cuidado con los blancos a izquierda del número de la factura, la     -->
+                                        <!-- AEAT los suprime y esto causa que la factura no sea detectada por la -->
+                                        <!-- operación de update realizada en las líneas precedentes.             -->
+                                        <!-- Para evitar el problema se ha instalado el check c_cimpcont_head1 en -->
+                                        <!-- la tabla cimpcont_head SUBSTR(docser, 1, 1) != ' '                   -->
+                                        <!-- ==================================================================== -->
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>Id Emisor: [<m_nif/>] <string.nl/>Número de factura: [<m_numseriefacturaemisor/>] <string.nl/>Fecha de factura: [<m_fechaexpedicionfacturaemisor/>] <string.nl/>Identificador bien: [<m_identificacionbien/>]  <string.nl/>Identificador interno: [<m_seqno/>]<string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Update error in [es_sii_bienes_inversion] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <!-- ==================================================================== -->
+                                <!-- Backup identificador para registrar error en es_sii_requests_error   -->
+                                <!-- ==================================================================== -->
+                                <set name='es_sii_requests_error_seqno'><m_seqno/></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_cob_metalico                                                  -->
+                        <!--    CM Cobros en Metálico                                             -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(CM)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <!-- A partir del identificador del registro obtiene el valor de head_seqno  -->
+                                <select prefix='m_'>
+                                    <columns>seqno</columns>
+                                    <from table='es_sii_cob_metalico' />
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular/>
+                                        AND ejercicio        = <m_ejercicio/>
+                                        AND periodo          = <m_periodo/>
+                                        AND contr_cif        = <m_nif/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </select>
+                                <if>
+                                    <expr>
+                                        <isnull><m_seqno/></isnull>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>NIF Contraparte: [<m_nif/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Registro de cobro en metálico no encontrado en [es_sii_cob_metalico] ID: [<p_id_ws_request/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <update table='es_sii_cob_metalico'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                            seqno            = <m_seqno/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </update>
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>NIF Contraparte: [<m_nif/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Update error in [es_sii_cob_metalico] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <!-- ==================================================================== -->
+                                <!-- Backup identificador para registrar error en es_sii_requests_error   -->
+                                <!-- ==================================================================== -->
+                                <set name='es_sii_requests_error_seqno'><m_seqno/></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_oper_seguros                                                  -->
+                        <!--    OS Operaciones de seguros                                         -->
+                        <!-- ==================================================================== -->
+                        <if>
+                            <expr>
+                                <string.regexp><m_libro/><string>(OS)</string></string.regexp>
+                            </expr>
+                            <then>
+                                <set name='m_claveoperacion'><json.get name='siiR:ClaveOperacion'><m_rlinea /></json.get></set>
+                                <!-- A partir del identificador del registro obtiene el valor de head_seqno -->
+                                <select prefix='m_'>
+                                    <columns>seqno</columns>
+                                    <from table='es_sii_oper_seguros' />
+                                    <where>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                            empcode          = <es_sii_requests_empcode/>
+                                        AND niftitular       = <es_sii_requests_niftitular/>
+                                        AND ejercicio        = <m_ejercicio/>
+                                        AND periodo          = <m_periodo/>
+                                        AND contr_cif        = <m_nif/>
+                                        AND claveoperacion   = <m_claveoperacion/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </select>
+                                <if>
+                                    <expr>
+                                        <isnull><m_seqno/></isnull>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>NIF Contraparte: [<m_nif/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Registro de cobro en metálico no encontrado en [es_sii_oper_seguros] ID: [<p_id_ws_request/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <update table='es_sii_oper_seguros'>
+                                    <column name='erp_estado'>E</column>     <!-- Mensaje Entregado -->
+                                    <column name='sii_estado' text='true'>
+                                        CASE WHEN UPPER(<m_estadoregistro/>) = 'CORRECTO'           THEN '1'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'ACEPTADOCONERRORES' THEN '2'
+                                             WHEN UPPER(<m_estadoregistro/>) = 'INCORRECTO'         THEN '3'
+                                             ELSE '9'   <!-- No previsto ! -->
+                                         END
+                                    </column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                            seqno            = <m_seqno/>
+                                        AND erp_estado       = 'G'     <!-- Mensaje Generado   -->
+                                        AND sii_estado       = '0'     <!-- No entregado a SII -->
+                                        AND tipocomunicacion = <es_sii_requests_tipocomunicacion/>
+                                        AND id_ws_request    = <p_id_ws_request/>
+                                    </where>
+                                </update>
+                                <if>
+                                    <expr>
+                                        <ne><sqlca.count/><number>1</number></ne>
+                                    </expr>
+                                    <then>
+                                        <set name='m_msg_id'><string>Método: [<p_method_code/>]. <string.nl/>Empresa: [<es_sii_requests_empcode/>] <string.nl/>NIF Titular: [<es_sii_requests_niftitular/>] <string.nl/>Presentador: [<es_sii_requests_nifpresentador/>] <string.nl/>Ejercicio: [<m_ejercicio/>] <string.nl/>Período: [<m_periodo/>] <string.nl/>NIF Contraparte: [<m_nif/>] <string.nl/>Clave de la operación: [<m_claveoperacion/>] <string.nl/>Tipo de comunicación: [<es_sii_requests_tipocomunicacion/>]</string></set>
+                                        <exception>Update error in [es_sii_oper_seguros] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                    </then>
+                                </if>
+
+                                <!-- ==================================================================== -->
+                                <!-- Backup identificador para registrar error en es_sii_requests_error   -->
+                                <!-- ==================================================================== -->
+                                <set name='es_sii_requests_error_seqno'><m_seqno/></set>
+                            </then>
+                        </if>
+
+                        <!-- ==================================================================== -->
+                        <!-- es_sii_responses_error                                               -->
+                        <!-- Si no es Correcto registramos el error de la factura.                -->
+                        <!-- ==================================================================== -->
+                        <set name='m_estadoregistro'><string.toUpperCase><m_estadoregistro/></string.toUpperCase></set>
+                        <if>
+                            <expr>
+                                <ne><m_estadoregistro/><string>CORRECTO</string></ne>
+                            </expr>
+                            <then>
+                                <switch name='m_estadoregistro'>
+                                    <case value='ACEPTADOCONERRORES'>
+                                        <set name='m_num_estadoregistro' type='string'><string>2</string></set>
+                                    </case>
+                                    <case value='INCORRECTO'>
+                                        <set name='m_num_estadoregistro' type='string'><string>3</string></set>
+                                    </case>
+                                    <default>
+                                        <exception>Estado registro no previsto: [<m_estadoregistro/>]. Solicitud: [<p_id_ws_request/>]</exception>
+                                    </default>
+                                </switch>
+                                <set name='m_codigoerror'><json.get name='siiR:CodigoErrorRegistro'><m_rlinea /></json.get></set>
+                                <set name='m_descripcionerror'><json.get name='siiR:DescripcionErrorRegistro'><m_rlinea /></json.get></set>
+
+                                <!-- ==================================================================== -->
+                                <!-- Mensajes de error de facturas emitidas y recibidas                   -->
+                                <!-- ==================================================================== -->
+                                <if>
+                                    <expr>
+                                        <string.regexp><m_libro/><string>(FE|FR|IA)</string></string.regexp>
+                                    </expr>
+                                    <then>
+                                        <insert table='es_sii_responses_error'>
+                                            <column name='id_ws_request'><p_id_ws_request/></column>
+                                            <column name='niftitular'><es_sii_requests_niftitular/></column>
+                                            <column name='libro'><m_libro/></column>
+                                            <column name='idemisor'><m_nif/></column>
+                                            <column name='numfactura'><m_numseriefacturaemisor/></column>
+                                            <column name='fechafactura'><m_fechaexpedicionfacturaemisor/></column>
+                                            <column name='estadoregistro'><m_num_estadoregistro/></column>
+                                            <column name='codigoerror'><m_codigoerror/></column>
+                                            <column name='descripcionerror'><m_descripcionerror/></column>
+                                        </insert>
+                                    </then>
+                                    <else>
+                                        <!-- ==================================================================== -->
+                                        <!-- Mensajes de error de cobros y pagos de facturas emitidas y recibidas -->
+                                        <!-- y resto de libros.                                                   -->
+                                        <!-- ==================================================================== -->
+                                        <if>
+                                            <expr>
+                                                <isnull><es_sii_requests_error_seqno/></isnull>
+                                            </expr>
+                                            <then>
+                                                <exception>Unexpected null identifier [es_sii_requests_error_seqno] for request ID: [<p_id_ws_request/>] Regs: [<sqlca.count/>] <string.nl/><m_msg_id/></exception>
+                                            </then>
+                                        </if>
+
+                                        <!-- ==================================================================== -->
+                                        <!-- Mensajes de error de todos los libros excepto facturas emitidas y    -->
+                                        <!-- recibidas.                                                           -->
+                                        <!-- ==================================================================== -->
+                                        <insert table='es_sii_requests_error'>
+                                            <column name='id_ws_request'><p_id_ws_request/></column>
+                                            <column name='niftitular'><es_sii_requests_niftitular/></column>
+                                            <column name='libro'><m_libro/></column>
+                                            <column name='seqno'><es_sii_requests_error_seqno/></column>
+                                            <column name='estadoregistro'><m_num_estadoregistro/></column>
+                                            <column name='codigoerror'><m_codigoerror/></column>
+                                            <column name='descripcionerror'><m_descripcionerror/></column>
+                                        </insert>
+                                    </else>
+                                </if>
+
+                            </then>
+                        </if>
+
+                    </do>
+                </iterator>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- INICIO PROCESO                                                          -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Send messages                                                           -->
+        <!--                                                                         -->
+        <!-- status_message                                                          -->
+        <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+        <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+        <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+        <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+        <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+        <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+        <!--     CA  Cancelado ( Cancelled )                                         -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <foreach>
+            <select prefix='m_' secure='true' >
+                <columns>
+                    cwsi_messages.*,
+                    cwsi_methods.service_name,
+                    cwsi_methods.method_name,
+                    cwsi_services.service_group,
+                    cwsi_services.url_service_prod,
+                    cwsi_services.url_service_test
+                </columns>
+                <from table='cwsi_messages'>
+                    <join type='inner' table='es_sii_requests'>
+                        <on>cwsi_messages.id_ws_request = es_sii_requests.id_ws_request</on>
+                    </join>
+                    <join type='inner' table='cwsi_methods'>
+                        <on>cwsi_messages.method_code = cwsi_methods.method_code</on>
+                        <join type='inner' table='cwsi_services'>
+                            <on>cwsi_methods.service_name = cwsi_services.service_name</on>
+                            <join type='inner' table='cwsi_channels'>
+                                <on>cwsi_services.channel_code = cwsi_channels.channel_code</on>
+                            </join>
+                        </join>
+                    </join>
+                </from>
+                <where>
+                        cwsi_messages.status_message IN ('UD', 'PD')    <!-- UD  Pendiente entregar el mensaje      ( Undelivered )    -->
+                                                                        <!-- PD  Mensaje recibido pendiente digerir ( Pending Digest ) -->
+                    AND <p_str_query mode='unquoted'/>
+                </where>
+                <order>cwsi_messages.id_ws_request</order>
+            </select>
+            <do>
+
+                <!-- ======================================================================= -->
+                <!-- Entregar mensaje                                                        -->
+                <!--                                                                         -->
+                <!-- status_message                                                          -->
+                <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+                <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+                <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                <!--     CA  Cancelado ( Cancelled )                                         -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_status_message/>UD</eq>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Entrega la solicitud                                                    -->
+                        <!-- ======================================================================= -->
+                        <local_send_request into='m_status_message'>
+                            <m_id_ws_request/>
+                            <m_key_name/>
+                            <m_message_request/>
+                            <m_method_code/>
+                            <m_service_name/>
+                            <m_method_name/>
+                            <m_service_group/>
+                            <m_url_service_prod/>
+                            <m_url_service_test/>
+                        </local_send_request>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Procesar la respuesta                                                   -->
+                <!--                                                                         -->
+                <!-- status_message                                                          -->
+                <!--     UD  Pendiente entregar el mensaje      ( Undelivered      )         -->
+                <!--     IP  Proceso de entrega iniciado.       ( WebService In Process )    -->
+                <!--     PD  Mensaje recibido pendiente digerir ( Pending Digest   )         -->
+                <!--     OK  Respuesta correcta. "OK. Mensaje procesado".     ( OK )         -->
+                <!--     FS  Respuesta SOAPFault de tipo Server ( SOAPFault Server )         -->
+                <!--     FC  Respuesta SOAPFault de tipo Client ( SOAPFault Client )         -->
+                <!--     CA  Cancelado ( Cancelled )                                         -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_status_message/>PD</eq>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Digest WebService message                                               -->
+                        <!-- ======================================================================= -->
+                        <local_digest_response>
+                            <string>cwsi_messages.id_ws_request = <m_id_ws_request/></string>
+                        </local_digest_response>
+                    </then>
+                </if>
+
+            </do>
+        </foreach>
+
+        <println><string>END</string></println>    <!-- Evita que dbstudio mostri errors capturats en try/catch ! -->
+
+    </body>
+</xsql-script>

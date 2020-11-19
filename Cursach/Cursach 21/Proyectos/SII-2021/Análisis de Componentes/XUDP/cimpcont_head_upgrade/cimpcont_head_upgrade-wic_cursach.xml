@@ -1,0 +1,1110 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XUDP cimpcont_head_upgrade( .. )                                        -->
+<!--                                                                         -->
+<!-- Proceso para la actualización de la tabla cimpcont_head                 -->
+<!--                                                                         -->
+<!-- TABLA cimpcont_head:                                                    -->
+<!-- ===================                                                     -->
+<!-- La tabla cimpcont_head simula, aunque no exactamente, una cabecera de   -->
+<!-- control de registros de la tabla de impuestos cimpcont con los          -->
+<!-- siguientes propósitos:                                                  -->
+<!--                                                                         -->
+<!--     1) Controlar la unicidad de las facturas.                           -->
+<!--                                                                         -->
+<!--     2) Controlar si una factura ya ha sido declarada para evitar        -->
+<!--        cambios sobre ella. Se trata de un control general que servirá   -->
+<!--        con independencia del tipo de declaración:                       -->
+<!--                                                                         -->
+<!--            ES/SII AEAT Suministro inmediato de información, etc.        -->
+<!--                                                                         -->
+<!-- Este proceso se invoca desde los tres disparadores de cimpcont          -->
+<!--                                                                         -->
+<!--      cimpcont_ins  Creará nuevo registro de cabecera o en su caso       -->
+<!--                    si la factura ya ha sido declarada rechazará la      -->
+<!--                    transacción.                                         -->
+<!--                                                                         -->
+<!--      cimpcont_upd  Si el registro de control de factura está            -->
+<!--                    comprometido (ya se ha declarado el impuesto)        -->
+<!--                    rechazará la transacción.                            -->
+<!--                    En caso de no estar comprometido procederá a         -->
+<!--                    eliminarlo y volver a crearlo.                       -->
+<!--                                                                         -->
+<!--      cimpcont_del  Similar que en cimpcont_upd                          -->
+<!--                    Tratamiento especial para las operaciones de         -->
+<!--                    tránsito de Modificación y tránsito de Baja desde    -->
+<!--                    el sistema ES_SII                                    -->
+<!--                                                                         -->
+<!--  y desde el XSQL setup_cimpcont_head_insert para el setup inicial de la -->
+<!--  tabla cimpcont_head , en tal caso se ejecutará una sola vez para       -->
+<!--  informar cimpcont_head con las facturas registradas a partir del       -->
+<!--  01-01-2017. A partir del setup deberán ser los triggers de cimpcont    -->
+<!--  los que mantengan actualizada la tabla cimpcont_head.                  -->
+<!--                                                                         -->
+<!-- Cambios de estructura en tabla cimpcont desde 09-12-2008:                                                    -->
+<!-- ========================================================                                                     -->
+<!--     Delta 1.9   09-12-2008  Nueva columna: fecope                                                            -->
+<!--                                                                                                              -->
+<!--     Delta 1.10  10-02-2009  Nueva columna: fecrec  (Antes: feccar)                                           -->
+<!--                             Nueva columna: docrec                                                            -->
+<!--                             Nueva columna: auxchr1                                                           -->
+<!--                             Nueva columna: auxchr2                                                           -->
+<!--                             Nueva columna: auxchr3                                                           -->
+<!--                             Nueva columna: auxchr4                                                           -->
+<!--                             Nueva columna: auxfec1                                                           -->
+<!--                             Nueva columna: auxfec2                                                           -->
+<!--                             Nueva columna: auxnum1 (Antes: numdec)                                           -->
+<!--                             Nueva columna: auxnum2 (Antes: gastos)                                           -->
+<!--                                                                                                              -->
+<!--     Delta 1.11  13-02-2009  Nueva columna: codnac                                                            -->
+<!--                                                                                                              -->
+<!--     Delta 1.13  09-12-2009  Columna codpos renombrada, antes se llamaba codpro                               -->
+<!--                                                                                                              -->
+<!--     Delta 1.21  30-04-2014  Nueva columna: cashvat - RECC Regimen Especial Criterio de Caja                  -->
+<!--                             Nueva columna: numefe  - RECC Regimen Especial Criterio de Caja (Antes: auxnum2) -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<procedure name='cimpcont_head_upgrade'>
+    <args>
+        <arg name='p_event'             type='char' size='2'    />      <!-- I: Insert  ;  UN: Update Next ; UP: Update Previous ; D: Delete -->
+        <arg name='p_orden'             like='cimpcont.orden'   />
+        <arg name='p_apteid'            like='cimpcont.apteid'  />
+        <arg name='p_genera'            like='cimpcont.genera'  />
+        <arg name='p_natfac'            like='cimpcont.natfac'  />
+        <arg name='p_fecha'             like='cimpcont.fecha'   />
+        <arg name='p_fecdoc'            like='cimpcont.fecdoc'  />
+        <arg name='p_fecope'            type='date'             />      <!-- Delta 1.9   09-12-2008  Nueva columna: fecope  -->
+        <arg name='p_fecrec'            type='date'             />      <!-- Delta 1.10  10-02-2009  Nueva columna: fecrec  (Antes: feccar) -->
+        <arg name='p_moneda'            like='cimpcont.moneda'  />
+        <arg name='p_cambio'            like='cimpcont.cambio'  />
+        <arg name='p_empcode'           like='cimpcont.empcode' />
+        <arg name='p_proyec'            like='cimpcont.proyec'  />
+        <arg name='p_seccio'            like='cimpcont.seccio'  />
+        <arg name='p_jusser'            like='cimpcont.jusser'  />
+        <arg name='p_docser'            like='cimpcont.docser'  />
+        <arg name='p_refter'            like='cimpcont.refter'  />
+        <arg name='p_docrec'            type='char' size='20'   />      <!-- Delta 1.10  10-02-2009  Nueva columna: docrec  -->
+        <arg name='p_tercer'            like='cimpcont.tercer'  />
+        <arg name='p_tipdir'            like='cimpcont.tipdir'  />
+        <arg name='p_nombre'            like='cimpcont.nombre'  />
+        <arg name='p_cif'               like='cimpcont.cif'     />
+        <arg name='p_codnac'            type='char' size='3'    />      <!-- Delta 1.11  13-02-2009  Nueva columna: codnac  -->
+        <arg name='p_codpos'            type='char' size='10'   />      <!-- Delta 1.13  09-12-2009  Columna codpos renombrada, antes se llamaba codpro -->
+        <arg name='p_import'            like='cimpcont.import'  />
+        <arg name='p_zimfis'            like='cimpcont.zimfis'  />
+        <arg name='p_zimter'            like='cimpcont.zimter'  />
+        <arg name='p_opeimp'            like='cimpcont.opeimp'  />
+        <arg name='p_codimp'            like='cimpcont.codimp'  />
+        <arg name='p_codtra'            like='cimpcont.codtra'  />
+        <arg name='p_tipimp'            like='cimpcont.tipimp'  />
+        <arg name='p_basimp'            like='cimpcont.basimp'  />
+        <arg name='p_totimp'            like='cimpcont.totimp'  />
+        <arg name='p_basdiv'            like='cimpcont.basdiv'  />
+        <arg name='p_totdiv'            like='cimpcont.totdiv'  />
+        <arg name='p_cashvat'           type='smallint'         />      <!-- Delta 1.21  30-04-2014  Nueva columna: cashvat - RECC Regimen Especial Criterio de Caja -->
+        <arg name='p_valida'            like='cimpcont.valida'  />
+        <arg name='p_numefe'            type='integer'          />      <!-- Delta 1.21  30-04-2014  Nueva columna: numefe  - RECC Regimen Especial Criterio de Caja (Antes: auxnum2) -->
+        <arg name='p_docgen'            like='cimpcont.docgen'  />
+        <arg name='p_tipret'            like='cimpcont.tipret'  />
+        <arg name='p_imppor'            like='cimpcont.imppor'  />
+        <arg name='p_porpro'            like='cimpcont.porpro'  />
+        <arg name='p_auxchr1'           like='cimpcont.auxchr1'  />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxchr1 -->
+        <arg name='p_auxchr2'           like='cimpcont.auxchr2' />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxchr2 -->
+        <arg name='p_auxchr3'           like='cimpcont.auxchr3' />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxchr3 -->
+        <arg name='p_auxchr4'           like='cimpcont.auxchr4' />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxchr4 -->
+        <arg name='p_auxfec1'           type='date'             />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxfec1 -->
+        <arg name='p_auxfec2'           type='date'             />      <!-- Delta 1.10  10-02-2009  Nueva columna: auxfec2 -->
+        <arg name='p_auxnum1'           type='decimal' size='14,4' />   <!-- Delta 1.10  10-02-2009  Nueva columna: auxnum1 (Antes: numdec) -->
+        <arg name='p_auxnum2'           type='decimal' size='14,4' />   <!-- Delta 1.10  10-02-2009  Nueva columna: auxnum2 (Antes: gastos) -->
+        <arg name='p_user_created'      like='cimpcont.user_created' />
+        <arg name='p_date_created'      like='cimpcont.date_created' />
+        <arg name='p_user_updated'      like='cimpcont.user_updated' />
+        <arg name='p_date_updated'      like='cimpcont.date_updated' />
+    </args>
+    <define>
+        <!-- ======================================================================= -->
+        <!-- cimpcont_head                                                           -->
+        <!-- ======================================================================= -->
+        <variable name='cimpcont_head_head_seqno'           like='cimpcont_head.head_seqno' />
+        <variable name='cimpcont_head_empcode'              like='cimpcont_head.empcode' />
+        <variable name='cimpcont_head_natfac'               like='cimpcont_head.natfac' />
+        <variable name='cimpcont_head_cif'                  like='cimpcont_head.cif' />
+        <variable name='cimpcont_head_cif_emisor'           like='cimpcont_head.cif_emisor' />
+        <variable name='cimpcont_head_docser'               like='cimpcont_head.docser' />
+        <variable name='cimpcont_head_fecdoc'               like='cimpcont_head.fecdoc' />
+        <variable name='cimpcont_head_fecha'                like='cimpcont_head.fecha' />
+        <variable name='cimpcont_head_jusser'               like='cimpcont_head.jusser' />
+        <variable name='cimpcont_head_orden'                like='cimpcont_head.orden' />
+        <variable name='cimpcont_head_head_warning'         like='cimpcont_head.head_warning' />
+        <variable name='cimpcont_head_head_status'          like='cimpcont_head.head_status' />
+
+        <!-- ======================================================================= -->
+        <!-- cimpcont                                                                -->
+        <!-- ======================================================================= -->
+        <variable name='cimpcont_apteid'                    like='cimpcont.apteid' />
+        <variable name='cimpcont_numefe'                    type='integer' />       <!-- No es like porque en instalaciones antiguas puede no existir la columna. -->
+
+        <!-- ======================================================================= -->
+        <!-- es_sii_facturas                                                         -->
+        <!-- ======================================================================= -->
+        <variable name='es_sii_facturas_niftitular'         like='es_sii_facturas.niftitular' />
+        <variable name='es_sii_facturas_libro'              like='es_sii_facturas.libro' />
+        <variable name='es_sii_facturas_head_seqno'         like='es_sii_facturas.head_seqno' />
+        <variable name='es_sii_facturas_erp_estado'         like='es_sii_facturas.erp_estado' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <variable name='m_emp_country_a2'                   like='ctiponac.coda2' />
+        <variable name='m_emp_cif'                          like='cimpcont.cif' />
+        <variable name='m_cif_emisor'                       like='cimpcont.cif' />
+        <variable name='m_fecha_check'                      type='date' />
+        <variable name='m_count'                            type='integer' />
+        <variable name='m_verifica_apteid_cero'             type='integer' />
+    </define>
+    <body>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <set name='m_verifica_apteid_cero'>1</set>
+        <include name='before' />
+
+        <!-- ======================================================================= -->
+        <!-- A partir de 01-01-2017 los registros de control de cabecera de facturas -->
+        <!-- deben existir.                                                          -->
+        <!-- ======================================================================= -->
+        <set name='m_fecha_check'><mdy><m>1</m><d>1</d><y>2017</y></mdy></set>
+
+
+        <!-- ======================================================================= -->
+        <!-- Tratamiento p_cashvat (en versión actual siempre 0 en trigger!!!)       -->
+        <!-- Si zimter = ESCC -> p_cashvat = 1                                       -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_zimter = 'ESCC' AND (p_valida = 'N' OR p_valida = 'R')</expr>
+            <then>
+                <set name='p_cashvat'>1</set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- ATENCIÓN - INICIO BLOQUE DE EXCLUSIÓN DE DOCUMENTOS                     -->
+        <!--                                                                         -->
+        <!-- Documentos excluidos del control de unicidad de facturas.               -->
+        <!--                                                                         -->
+        <!-- Los documentos no sujetos al control de unicidad de facturas también    -->
+        <!-- quedarán excluidos de las declaraciones impositivas del IVA en el censo -->
+        <!-- SII Suministro inmediato de información de la AEAT.                     -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 1)                                                            -->
+        <!-- Prescindimos de los registros con importe CERO.                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_import = 0 AND p_basimp = 0 AND p_totimp = 0</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 2)                                                            -->
+        <!-- Prescindimos de los registros de retenciones.                           -->
+        <!-- Las facturas contendrán al menos un registro de IVA siendo unos de      -->
+        <!-- estos registros los que activarán el control de unicidad de factura.    -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_tipimp = 'R'</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 3)                                                            -->
+        <!-- Prescindimos de los registros generados por el proceso de autofacturas  -->
+        <!-- por ( XSQL cimpcont_autofact ) por las operaciones de inversión del     -->
+        <!-- sujeto pasivo.                                                          -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_docgen = 'R'</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 4)                                                            -->
+        <!-- Prescindimos de los registros generados por el proceso de validación de -->
+        <!-- impuestos ( XSQL p_validacion ) puesto que corresponden a los           -->
+        <!-- registros de activación de cobros y pagos en el contexto de la          -->
+        <!-- operaciones del RECC Regimen especial del criterio de caja de la AEAT.  -->
+        <!--                                                                         -->
+        <!-- Si p_numefe (cimpcont.numefe) no esta informado tomará cimpcont.refter  -->
+        <!-- ya que este es el antiguo backup del identificador de cartera en        -->
+        <!-- versiones anteriores a 07-08-2009, ver Delta 1.23 en XSQL               -->
+        <!-- cimpcont_validacion.                                                    -->
+        <!-- ======================================================================= -->
+        <set name='cimpcont_numefe'>p_numefe</set>
+        <if>
+            <expr>p_valida = 'R' AND (cimpcont_numefe = 0 OR cimpcont_numefe IS NULL)</expr>
+            <then>
+                <set name='cimpcont_numefe'>p_refter</set>
+            </then>
+        </if>
+<!-- 14-06-2017
+        <if>
+            <expr>p_valida = 'R' AND cimpcont_numefe > 0</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+        <if>
+            <expr>p_valida = 'R'</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+-->
+        <!-- ======================================================================= -->
+        <!-- 19-06-2017                                                              -->
+        <!-- EXCLUSIÓN 4.1)                                                          -->
+        <!-- Facturas RECC Regimen Especial Criterio de Caja                         -->
+        <!--                                                                         -->
+        <!--    1) Son facturas los cimpcont.valida    = N AND cimpcont.cashvat = 1  -->
+        <!--    2) No son facturas los cimpcont.valida = R AND cimpcont.cashvat = 1  -->
+        <!--       Estos registros solo se utilizarán para declarar los cobros y/o   -->
+        <!--       pagos de las facturas RECC.                                       -->
+        <!--                                                                         -->
+        <!-- Excluye registros Post-validados por no tener la consideración de       -->
+        <!-- factura.                                                                -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_valida = 'R' AND p_cashvat = 1</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- 19-06-2017                                                              -->
+        <!-- EXCLUSIÓN 4.2)                                                          -->
+        <!-- CERTIFICACIONES DE OBRA:                                                -->
+        <!--    1) No son facturas los cimpcont.valida = N AND cimpcont.cashvat = 0  -->
+        <!--       Es una factura de certificación sin afectación a libros de IVA.   -->
+        <!--       ATENCIÓN: Solo admite un único vencimiento en cartera.            -->
+        <!--                 Más de un vencimiento ocasionaría factura duplicada en  -->
+        <!--                 los regitros valida = R                                 -->
+        <!--                                                                         -->
+        <!--    2) Son facturas los    cimpcont.valida = R AND cimpcont.cashvat = 0  -->
+        <!--       Es la validación de la factura de certificación con afectación a  -->
+        <!--       libros de IVA.                                                    -->
+        <!--                                                                         -->
+        <!-- Excluye registros No-validados por Operaciones de certificaciones de    -->
+        <!-- obra o similares.                                                       -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_valida = 'N' AND p_cashvat = 0</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 5)                                                            -->
+        <!-- Prescindimos de los registros correspondientes a gastos suplidos ya que -->
+        <!-- no deben informase al censo SII.                                        -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>es_sii_get_is_supplied( p_opeimp ) = 1</expr>
+            <then>
+                <return/>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN 6)                                                            -->
+        <!-- Prescindimos de los documentos que no son facturas como por ejemplo     -->
+        <!-- las operaciones de seguros que se declaran en el libro operaciones de   -->
+        <!-- trascendencia tributaria a final de año (Simil antiguo 347).            -->
+        <!--                                                                         -->
+        <!-- Libro: esSII_LROS  SII - Operacioes de seguros                          -->
+        <!--                                                                         -->
+        <!--     OSA  Operaciones de seguros - Indemnizaciones o prestaciones satisfechas               -->
+        <!--          Grupo A / Afecta a Compras                                     -->
+        <!--                                                                         -->
+        <!--     OSB  Operaciones de seguros - Primas o contraprestaciones percibidas                   -->
+        <!--          Grupo B / Afecta a Ventas                                      -->
+        <!--                                                                         -->
+        <!--     OSN  Operaciones de seguros - No afecta al libro anual de operaciones de seguros       -->
+        <!--          Grupo N / No declarable en el libro de operaciones de seguros  (convenio Axional) -->
+        <!--                                                                         -->
+        <!-- Comprueba que esté definido el libro de operaciones de seguros          -->
+        <!-- con código convenido esSII_LROS                                         -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <!-- ATENCIÓN: -->
+        <!-- Comentar este bloque de código si no existe la tabla cimpbookl o bien   -->
+        <!-- no se realizan operaciones de seguros en el cliente.                    -->
+        <if>
+            <expr>p_opeimp LIKE 'OS%'</expr>
+            <then>
+                <select>
+                        COUNT(*) AS regs
+                    <into>
+                        m_count
+                    </into>
+                     FROM cimpbookl
+                    WHERE codigo LIKE 'esSII_LROS'
+                      AND opeimp = p_opeimp
+                </select>
+                <if>
+                    <expr>m_count > 0</expr>
+                    <then>
+
+                        <!-- Comprueba que bajo el mismo apteid no hay ningún registro con cuota -->
+                        <!-- distinta de cero, en caso contrario generamos una excepción puesto  -->
+                        <!-- que se trataría de un contexto inesperado.                          -->
+                        <if>
+                            <expr>p_apteid > 0</expr>
+                            <then>
+
+                                <select>
+                                        COUNT(*) AS regs
+                                    <into>
+                                        m_count
+                                    </into>
+                                     FROM cimpcont
+                                    WHERE apteid  = p_apteid
+                                      AND tipimp != 'R'     <!-- Excluimos retenciones -->
+                                      AND totimp != 0       <!-- Si la cuota es distinta de cero es error ! -->
+                                </select>
+                                <if>
+                                    <expr>m_count > 0</expr>
+                                    <then>
+                                        <exception>'cimpcont_head_upgrade: Error en op.seguros [' || <trim>p_empcode</trim> || '] [' || <trim>p_jusser</trim> || '].'</exception>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <return/>
+
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIONES CUSTOMIZADAS OPCIONALES                                     -->
+        <!-- ======================================================================= -->
+        <include name='excluding_doc'/>
+
+        <!-- ======================================================================= -->
+        <!-- ATENCIÓN - FIN BLOQUE DE EXCLUSIÓN DE DOCUMENTOS                        -->
+        <!-- ======================================================================= -->
+
+
+        <!-- ======================================================================= -->
+        <!-- Obtiene pais Alfa-2 i CIF de la empresa.                                -->
+        <!-- ======================================================================= -->
+        <select>
+                ctiponac.coda2 AS emp_country_a2,
+                CASE WHEN ctercero.cif LIKE 'ES%' THEN SUBSTR(ctercero.cif, 3) ELSE ctercero.cif END AS cif
+            <into>
+                m_emp_country_a2, m_emp_cif
+            </into>
+             FROM cempresa
+                  INNER JOIN ctercero ON cempresa.tercer = ctercero.codigo
+                  INNER JOIN cterdire ON cempresa.tercer = cterdire.codigo
+                                     AND cempresa.tipdir = cterdire.tipdir
+                  INNER JOIN ctiponac ON cterdire.codnac = ctiponac.codigo
+            WHERE cempresa.empcode = p_empcode
+              AND cempresa.tercer  = ctercero.codigo
+        </select>
+        <if>
+            <expr>m_emp_cif IS NULL</expr>
+            <then>
+                <exception>'cimpcont_head_upgrade: CIF empresa [' || <trim>p_empcode</trim> || '] no encontrado.'</exception>
+            </then>
+        </if>
+        <if>
+            <expr>m_emp_cif = '0'</expr>
+            <then>
+                <exception>'cimpcont_head_upgrade: CIF 0 en empresa [' || <trim>p_empcode</trim> || '].'</exception>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Determina el CIF del emisor de la factura.                              -->
+        <!-- Si es operación de ventas el CIF emisor es el de la empresa.            -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                p_natfac = 'V'
+            </expr>
+            <then>
+                <set name='m_cif_emisor'>m_emp_cif</set>
+                <set name='es_sii_facturas_libro'>'FE'</set>
+            </then>
+            <else>
+                <!-- Si es operación de compras el CIF emisor es el del tercero. -->
+                <set name='m_cif_emisor'>p_cif</set>
+                <set name='es_sii_facturas_libro'>'FR'</set>
+            </else>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Si el país de la empresa y el país según EL CIF del emisor son iguales  -->
+        <!-- puede convenir eliminar el prefijo del país del inicio de la cadena del -->
+        <!-- CIF.                                                                    -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>m_emp_country_a2 = SUBSTR(m_cif_emisor, 1, 2)</expr>
+            <then>
+
+                <!-- ======================================================================= -->
+                <!-- Por ahora solo depuramos el prefijo país de 'ES'                        -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>m_cif_emisor LIKE 'ES%'</expr>
+                    <then>
+                        <set name='m_cif_emisor'>SUBSTR(m_cif_emisor, 3)</set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                p_event != 'D'
+            </expr>
+            <then>
+                <select>
+                        cimpcont_head.head_seqno,  cimpcont_head.empcode,     cimpcont_head.natfac,         cimpcont_head.cif,
+                        cimpcont_head.cif_emisor,  cimpcont_head.docser,      cimpcont_head.fecdoc,         cimpcont_head.fecha,
+                        cimpcont_head.jusser,      cimpcont_head.orden,       cimpcont_head.head_warning,   cimpcont_head.head_status,
+                        cimpcont.apteid
+                    <into>
+                        cimpcont_head_head_seqno,  cimpcont_head_empcode,     cimpcont_head_natfac,         cimpcont_head_cif,
+                        cimpcont_head_cif_emisor,  cimpcont_head_docser,      cimpcont_head_fecdoc,         cimpcont_head_fecha,
+                        cimpcont_head_jusser,      cimpcont_head_orden,       cimpcont_head_head_warning,   cimpcont_head_head_status,
+                        cimpcont_apteid
+                    </into>
+                     FROM cimpcont_head
+                          LEFT JOIN cimpcont ON cimpcont_head.orden = cimpcont.orden
+                    WHERE cimpcont_head.empcode  = p_empcode
+                      AND cimpcont_head.natfac   = p_natfac
+                      AND cimpcont_head.fecdoc   = p_fecdoc
+                      AND cimpcont_head.cif      = p_cif
+                      AND cimpcont_head.docser   = p_docser
+                </select>
+            </then>
+            <else>
+                <!-- ======================================================================= -->
+                <!-- Compatibilidad ORACLE:                                                  -->
+                <!-- Si p_event = 'D' No realiza la join a cimpcont para obtener             -->
+                <!-- cimpcont_apteid para evitar error en Oracle !                           -->
+                <!-- El evento DELETE no requiere cimpcont_apteid !                          -->
+                <!-- ======================================================================= -->
+                <select>
+                        cimpcont_head.head_seqno,  cimpcont_head.empcode,     cimpcont_head.natfac,         cimpcont_head.cif,
+                        cimpcont_head.cif_emisor,  cimpcont_head.docser,      cimpcont_head.fecdoc,         cimpcont_head.fecha,
+                        cimpcont_head.jusser,      cimpcont_head.orden,       cimpcont_head.head_warning,   cimpcont_head.head_status
+                    <into>
+                        cimpcont_head_head_seqno,  cimpcont_head_empcode,     cimpcont_head_natfac,         cimpcont_head_cif,
+                        cimpcont_head_cif_emisor,  cimpcont_head_docser,      cimpcont_head_fecdoc,         cimpcont_head_fecha,
+                        cimpcont_head_jusser,      cimpcont_head_orden,       cimpcont_head_head_warning,   cimpcont_head_head_status
+                    </into>
+                     FROM cimpcont_head
+                    WHERE cimpcont_head.empcode  = p_empcode
+                      AND cimpcont_head.natfac   = p_natfac
+                      AND cimpcont_head.fecdoc   = p_fecdoc
+                      AND cimpcont_head.cif      = p_cif
+                      AND cimpcont_head.docser   = p_docser
+                </select>
+            </else>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Con independencia de los eventos insert y updated si la factura ya ha   -->
+        <!-- sido declarada ( ES_SII, etc.) cancelamos la transacción.               -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                p_event IN ('I', 'UP', 'UN')
+                AND
+                cimpcont_head_head_seqno IS NOT NULL
+            </expr>
+            <then>
+                <if>
+                    <expr>cimpcont_head_head_status != 0</expr>
+                    <then>
+                        <exception>'cimpcont_head_upgrade: Factura declarada. ID [' || <char>cimpcont_head_orden</char> || '] [' || <char>p_event</char> || ']'</exception>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- INSERT o VERIFICACIONES                                                 -->
+        <!-- ======================================================================= -->
+        <if><expr>p_event = 'I' OR p_event = 'UN'</expr>
+            <then>
+
+                <!-- ======================================================================= -->
+                <!-- INSERT                                                                  -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>cimpcont_head_head_seqno IS NULL</expr>
+                    <then>
+
+                        <!-- ======================================================================= -->
+                        <!-- Es poco probable detectar repeticiones de facturas de ventas por causa  -->
+                        <!-- del CIF del emisor de la facura.                                        -->
+                        <!-- ======================================================================= -->
+                        <select>
+                                COUNT(*)
+                            <into>
+                                m_count
+                            </into>
+                             FROM cimpcont_head
+                                  LEFT JOIN cimpcont ON cimpcont_head.orden = cimpcont.orden
+                            WHERE cimpcont_head.empcode    = p_empcode
+                              AND cimpcont_head.natfac     = p_natfac
+                              AND cimpcont_head.cif_emisor = m_cif_emisor
+                              AND cimpcont_head.docser     = p_docser
+                              AND cimpcont_head.fecdoc     = p_fecdoc
+                        </select>
+                        <if><expr>m_count > 0</expr>
+                            <then>
+                                <exception>'cimpcont_head_upgrade: Factura repetida. ID [' || <char>p_orden</char> || ' ' || p_docser||'].'</exception>
+                            </then>
+                        </if>
+
+                        <set name='cimpcont_head_head_warning'>0</set>
+                        <if><expr>p_apteid = 0</expr>
+                            <then>
+                                <set name='cimpcont_head_head_warning'>-1</set>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <insert table='cimpcont_head'>
+                            <column name='empcode'>p_empcode</column>
+                            <column name='natfac'>p_natfac</column>
+                            <column name='cif'>p_cif</column>
+                            <column name='cif_emisor'>m_cif_emisor</column>
+                            <column name='docser'>p_docser</column>
+                            <column name='fecdoc'>p_fecdoc</column>
+                            <column name='fecha'>p_fecha</column>
+                            <column name='jusser'>p_jusser</column>
+                            <column name='orden'>p_orden</column>
+                            <column name='head_warning'>cimpcont_head_head_warning</column>
+                            <column name='head_status'>0</column>
+                            <column name='user_created'>p_user_created</column>
+                            <column name='date_created'>p_date_created</column>
+                            <column name='user_updated'>p_user_updated</column>
+                            <column name='date_updated'>p_date_updated</column>
+                        </insert>
+						
+						<set name='cimpcont_head_head_seqno'><sqlca.serial /></set>	<!--Recuperamos el head_seqno generado-->						
+
+                        <!-- ======================================================================= -->
+                        <!-- Insertamos en cimpcont_head_aux si viene:                               -->
+						<!-- p_auxchr1: Ultimo nº de Ticket											 -->
+                        <!-- ======================================================================= -->
+						
+						<if>
+							<expr>p_auxchr1 IS NOT NULL</expr>
+							<then>
+
+								<insert table='cimpcont_head_aux'>
+									<column name='head_seqno'>cimpcont_head_head_seqno</column>
+									<column name='last_numfactura'>p_auxchr1</column>								
+								</insert>
+							
+							</then>							
+						</if>						
+
+                        <!-- ======================================================================= -->
+                        <!-- Insertamos en cimpcont_head_aux si viene:                               -->
+						<!-- p_auxchr2: Referencia Catastral										 -->
+                        <!-- ======================================================================= -->
+						
+						<if>
+							<expr>p_auxchr2 IS NOT NULL</expr>
+							<then>
+
+								<insert table='cimpcont_head_aux'>
+									<column name='head_seqno'>cimpcont_head_head_seqno</column>
+									<column name='inm_situacion'>1</column>
+									<column name='inm_refer_catastral'>p_auxchr2</column>									
+								</insert>
+							
+							</then>							
+						</if>												
+
+                        <!-- ======================================================================= -->
+                        <!-- Insertamos en cimpcont_head_aux si viene:                               -->
+						<!-- p_auxchr3: Factura Emitida por Tercero 								 -->
+                        <!-- ======================================================================= -->
+						
+						<if>
+							<expr>p_auxchr3 IS NOT NULL</expr>
+							<then>
+
+								<insert table='cimpcont_head_aux'>
+									<column name='head_seqno'>cimpcont_head_head_seqno</column>
+									<column name='fra_exp_tercero'>1</column>
+								</insert>
+							
+							</then>							
+						</if>
+						
+                    </then>
+                    <else>
+                        <!-- ======================================================================= -->
+                        <!-- VERIFICACIONES                                                          -->
+                        <!-- ======================================================================= -->
+
+                        <!-- ======================================================================= -->
+                        <!-- Error no previsto puesto que existe F.K. sobre la columna cimpcont.orden-->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>cimpcont_head_empcode IS NULL</expr>
+                            <then>
+                                <exception>'cimpcont_head_upgrade: Error [NOTFOUND]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control coherencia con código de empresa.                               -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                p_empcode != cimpcont_head_empcode
+                            </expr>
+                            <then>
+                                <exception>'Factura repetida por [empcode]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || <trim>cimpcont_head_empcode</trim> || '/' || <trim>p_empcode</trim> || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control coherencia con el justificante contable.                        -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                p_jusser != cimpcont_head_jusser
+                            </expr>
+                            <then>
+                                <exception>'Factura repetida por [jusser]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || <trim>cimpcont_head_jusser</trim> || '/' || <trim>p_jusser</trim> || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control coherencia con la fecha de registro contable.                   -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                p_fecha != cimpcont_head_fecha
+                            </expr>
+                            <then>
+                                <exception>'Factura repetida por [fecha]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || cimpcont_head_fecha || '/' || p_fecha || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control coherencia con código CIF emisor.                               -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                m_cif_emisor != cimpcont_head_cif_emisor
+                            </expr>
+                            <then>
+                                <exception>'Factura repetida por [cif_emisor]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || <trim>cimpcont_head_cif_emisor</trim> || '/' || <trim>m_cif_emisor</trim> || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control coherencia apteid.                                              -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                p_apteid != cimpcont_apteid
+                            </expr>
+                            <then>
+                                <exception>'Factura repetida por [apteid]. IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || cimpcont_apteid || '/' || p_apteid || ']'</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Control de factura repetida sobre registros cargados con interfases de  -->
+                        <!-- carga directa sobre la tabla cimpcont, donde todos los registros        -->
+                        <!-- informan valor CERO en la columna cimpcont.apteid                       -->
+                        <!--                                                                         -->
+                        <!-- En este tipo de registros las repeticiones de facturas no se detectarían-->
+                        <!-- si coinciden en fecha contable y justificante contable, por ello        -->
+                        <!-- realizamos query a cimpcont para detectar repeticiones para un mismo    -->
+                        <!-- identificador de factura y misma tipologia impositiva, cosa que en      -->
+                        <!-- principio no tendría sentido.                                           -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                p_apteid = 0 AND m_verifica_apteid_cero = 1
+                            </expr>
+                            <then>
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <select>
+                                        COUNT(*)
+                                    <into>
+                                        m_count
+                                    </into>
+                                     FROM cimpcont
+                                    WHERE cimpcont.empcode    = p_empcode
+                                      AND cimpcont.natfac     = p_natfac
+                                      AND cimpcont.cif        = p_cif
+                                      AND cimpcont.docser     = p_docser
+                                      AND cimpcont.fecdoc     = p_fecdoc
+                                      AND cimpcont.zimfis     = p_zimfis    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.zimter     = p_zimter    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.opeimp     = p_opeimp    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.codimp     = p_codimp    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.tipimp     = p_tipimp    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.import     = p_import    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.basimp     = p_basimp    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.totimp     = p_totimp    <!-- Misma tipologia impositiva -->
+                                      AND cimpcont.orden     != p_orden     <!-- Excluye el propio registro! -->
+                                </select>
+                                <if>
+                                    <expr>
+                                        m_count > 0
+                                    </expr>
+                                    <then>
+                                        <exception>'Factura repetida por [apteid]=0 IDS[' || <char>cimpcont_head_orden</char> || '] y [' || <char>p_orden</char> || '] [' || cimpcont_apteid || '/' || p_apteid || ']'</exception>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Actualizamos en cimpcont_head_aux si viene:                             -->
+						<!-- p_auxchr1: Ultimo nº de Ticket											 -->
+                        <!-- ======================================================================= -->						
+
+						<if>
+							<expr>p_auxchr1 IS NOT NULL</expr>
+							<then>				
+                                <select>
+                                        COUNT(*)
+                                    <into>
+                                        m_count
+                                    </into>
+                                     FROM cimpcont_head_aux
+									 WHERE head_seqno = cimpcont_head_head_seqno
+								</select>							
+								<if>
+									<expr>m_count = 0</expr>
+									<then>
+
+										<insert table='cimpcont_head_aux'>
+											<column name='head_seqno'>cimpcont_head_head_seqno</column>
+											<column name='last_numfactura'>p_auxchr1</column>
+										</insert>
+									
+									</then>
+									<else>
+
+										<update table='cimpcont_head_aux'>
+											<column name='last_numfactura'>p_auxchr1</column>
+											<where>head_seqno = cimpcont_head_head_seqno</where>
+										</update>
+									
+									</else>
+								</if>
+							</then>
+						</if>	
+                        <!-- ======================================================================= -->
+                        <!-- Actualizamos en cimpcont_head_aux si viene:                             -->
+						<!-- p_auxchr2: Referencia Catastral    									 -->
+                        <!-- ======================================================================= -->												
+						<if>		
+							<expr>p_auxchr2 IS NOT NULL</expr>
+							<then>
+                                <select>
+                                        COUNT(*)
+                                    <into>
+                                        m_count
+                                    </into>
+                                     FROM cimpcont_head_aux
+									 WHERE head_seqno = cimpcont_head_head_seqno
+								</select>
+								<if>
+									<expr>m_count = 0</expr>
+									<then>
+
+										<insert table='cimpcont_head_aux'>
+											<column name='head_seqno'>cimpcont_head_head_seqno</column>
+											<column name='inm_situacion'>1</column>
+											<column name='inm_refer_catastral'>p_auxchr2</column>
+										</insert>
+									
+									</then>
+									<else>
+
+										<update table='cimpcont_head_aux'>
+											<column name='inm_situacion'>1</column>
+											<column name='inm_refer_catastral'>p_auxchr2</column>
+											<where>head_seqno = cimpcont_head_head_seqno</where>
+										</update>
+									
+									</else>
+								</if>
+								
+							
+							</then>							
+						</if>						
+
+                        <!-- ======================================================================= -->
+                        <!-- Actualizamos en cimpcont_head_aux si viene:                             -->
+						<!-- p_auxchr3: Indicador de Factura Emitida por Terceros 					 -->
+                        <!-- ======================================================================= -->						
+
+						<if>
+							<expr>p_auxchr3 IS NOT NULL</expr>
+							<then>				
+                                <select>
+                                        COUNT(*)
+                                    <into>
+                                        m_count
+                                    </into>
+                                     FROM cimpcont_head_aux
+									 WHERE head_seqno = cimpcont_head_head_seqno
+								</select>							
+								<if>
+									<expr>m_count = 0</expr>
+									<then>
+
+										<insert table='cimpcont_head_aux'>
+											<column name='head_seqno'>cimpcont_head_head_seqno</column>
+											<column name='fra_exp_tercero'>1</column>
+										</insert>
+									
+									</then>
+									<else>
+
+										<update table='cimpcont_head_aux'>
+											<column name='fra_exp_tercero'>1</column>
+											<where>head_seqno = cimpcont_head_head_seqno</where>
+										</update>
+									
+									</else>
+								</if>
+							</then>
+						</if>	
+						
+						
+                    </else>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if><expr>p_event = 'D' OR p_event = 'UP'</expr>
+            <then>
+
+                <!-- ======================================================================= -->
+                <!-- Si el registro controlador de cimpcont_head no existe cancela la        -->
+                <!-- transacción.                                                            -->
+                <!-- Para que este control sea efectivo y cuando una factura contenga más de -->
+                <!-- un registro en cimpcont primero deben eliminarse los registros no       -->
+                <!-- enlazados y al final eliminar el registro enlazado en cimpcont_head.    -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>p_fecha >= m_fecha_check AND cimpcont_head_head_seqno IS NULL</expr>
+                    <then>
+                        <exception>'cimpcont_head_upgrade: Control inexistente. ID [' || <char>p_orden</char> || '].'</exception>
+                    </then>
+                </if>
+
+                <if>
+                    <expr>cimpcont_head_head_seqno IS NOT NULL</expr>
+                    <then>
+
+                        <!-- ======================================================================= -->
+                        <!-- COMPROBACIÓN EN es_sii_facturas                                         -->
+                        <!--     1) Control específico solo si vamos a realizar DELETE del registro  -->
+                        <!--        individual de cimpcont.                                          -->
+                        <!--     2) Si el pais de la empresa es España aplica control sobre el       -->
+                        <!--        registro controlador del sistema ES_SII                          -->
+                        <!-- ======================================================================= -->
+                        <if><expr>p_event = 'D' AND m_emp_country_a2 = 'ES'</expr>
+                            <then>
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <set name='es_sii_facturas_niftitular'>m_emp_cif</set>
+                                <select>
+                                        es_sii_facturas.head_seqno,         es_sii_facturas.erp_estado
+                                    <into>
+                                        es_sii_facturas_head_seqno,         es_sii_facturas_erp_estado
+                                    </into>
+                                     FROM es_sii_facturas
+                                          <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                    WHERE es_sii_facturas.empcode        = cimpcont_head_empcode
+                                      AND es_sii_facturas.niftitular     = es_sii_facturas_niftitular
+                                      AND es_sii_facturas.libro          = es_sii_facturas_libro
+                                      AND es_sii_facturas.idemisor       = cimpcont_head_cif_emisor
+                                      AND es_sii_facturas.numfactura     = cimpcont_head_docser
+                                      AND es_sii_facturas.fechafactura   = cimpcont_head_fecdoc
+                                </select>
+                                <!-- PK:
+                                    CREATE UNIQUE INDEX p_es_sii_facturas  ON es_sii_facturas (niftitular, libro, idemisor, numfactura, fechafactura);
+                                    ALTER TABLE es_sii_facturas ADD CONSTRAINT PRIMARY KEY (niftitular, libro, idemisor, numfactura, fechafactura) CONSTRAINT p_es_sii_facturas;
+                                -->
+
+                                <!-- ======================================================================= -->
+                                <!-- Si el registro controlador está declarado verifica contenidos.          -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>cimpcont_head_head_status != 0</expr>
+                                    <then>
+
+                                        <if>
+                                            <expr>es_sii_facturas_erp_estado IS NULL</expr>
+                                            <then>
+                                                <exception>'cimpcont_head_upgrade: ES_SII NOTFOUND [' || cimpcont_head_head_seqno || '].'</exception>
+                                            </then>
+                                        </if>
+                                        <if>
+                                            <expr>es_sii_facturas_head_seqno != cimpcont_head_head_seqno</expr>
+                                            <then>
+                                                <exception>'cimpcont_head_upgrade: ES_SII ERROR head_seqno: [' || cimpcont_head_head_seqno || '].'</exception>
+                                            </then>
+                                        </if>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Solo detenemos el proceso si el enlace es_sii_facturas_head_seqno es    -->
+                                        <!-- nulo y el controlador cimpcont_head indica que está declarado.          -->
+                                        <!--                                                                         -->
+                                        <!-- Ciclo que justifica esta circunstancia:                                 -->
+                                        <!--     1) Situamos en modificacón un registro en es_si_facuras.            -->
+                                        <!--     2) Descontabilizamos la factura.                                    -->
+                                        <!--     3) Realizamos ajustes y la volvemos a contabilizar.                 -->
+                                        <!--     4) Por la razón que sea requerimos volver a desconabilizarla. Es en -->
+                                        <!--        esta situación que tendremos un regisro en cimpcont_head no      -->
+                                        <!--        declarado y un regisro en es_sii_facturas pendiente de enlazar.  -->
+                                        <!-- ======================================================================= -->
+                                        <if>
+                                            <expr>es_sii_facturas_head_seqno IS NULL</expr>
+                                            <then>
+                                                <exception>'cimpcont_head_upgrade: ES_SII head_seqno IS NULL [' || cimpcont_head_head_seqno || '].'</exception>
+                                            </then>
+                                        </if>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Operación de DELETE no autorizada.                                      -->
+                                        <!-- Si el registro controlador en el sistema ES_SII no está situado en:     -->
+                                        <!--     M Tránsito (autorización) de MODIFICACIÓN                           -->
+                                        <!--     B Tránsito (autorización) de BAJA                                   -->
+                                        <!-- ======================================================================= -->
+                                        <if><expr>es_sii_facturas_erp_estado NOT IN('M', 'B')</expr>
+                                            <then>
+                                                <exception>'cimpcont_head_upgrade: ES_SII ALREADY DECLARED [' || cimpcont_head_head_seqno || '].'</exception>
+                                            </then>
+                                        </if>
+
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Solo elimina si el registro activador desde cimpcont es el mismo que el -->
+                        <!-- registrado en el control de cabecera.                                   -->
+                        <!-- ======================================================================= -->
+                        <if><expr>p_orden = cimpcont_head_orden</expr>
+                            <then>
+                                <!-- ======================================================================= -->
+                                <!-- AJUSTES EN es_sii_facturas                                              -->
+                                <!--     Esta modificación solo se aplica previo al delete en                -->
+                                <!--     cimpcont_head                                                       -->
+                                <!-- ======================================================================= -->
+                                <if><expr>p_event = 'D' AND m_emp_country_a2 = 'ES'</expr>
+                                    <then>
+
+                                        <!-- ======================================================================= -->
+                                        <!-- Desenlaza factura si erp_estado:                                        -->
+                                        <!--     M  Tránsito (autorización) de Modificación                          -->
+                                        <!--     B  Tránsito (autorización) de Baja                                  -->
+                                        <!-- ======================================================================= -->
+                                        <if><expr>es_sii_facturas_erp_estado IN ('M', 'B')</expr>
+                                            <then>
+                                                <update table='es_sii_facturas'>
+                                                    <column name='head_seqno'>NULL</column>
+                                                    <column name='sii_estado'>NULL</column>
+                                                    <column name='id_ws_request'>NULL</column>
+                                                    <!-- ======================================================================= -->
+                                                    <!-- 16-06-2017 ATENCIÓN - REPENSAR EN FUTURAS VERSIONES:                    -->
+                                                    <!-- Si vamos a comnicar una BAJA de una FACTURA RECIBIDA nos guardamos el   -->
+                                                    <!-- nombre del proveedor para informar la etiqueta NombreRazon en la        -->
+                                                    <!-- identificación de la factura del mensaje de BAJA.                       -->
+                                                    <!-- Es un dato requerido desde la versión 0.7 y nos hemos dado cuenta       -->
+                                                    <!-- demasiado tarde para pensar una solución mejor encuadrada.              -->
+                                                    <!-- ======================================================================= -->
+                                                    <column name='descoperacion'>CASE WHEN erp_estado = 'B' AND libro = 'FR' THEN p_nombre ELSE descoperacion END</column>
+                                                    <where>
+                                                        head_seqno = es_sii_facturas_head_seqno
+                                                    </where>
+                                                </update>
+                                            </then>
+                                        </if>
+
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+								
+                                <delete table='cimpcont_head_aux'>
+                                    <where>
+                                        head_seqno = cimpcont_head_head_seqno
+                                    </where>
+                                </delete>
+								
+                                <delete table='cimpcont_head'>
+                                    <where>
+                                        head_seqno = cimpcont_head_head_seqno
+                                    </where>
+                                </delete>
+                            </then>
+                        </if>
+
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include name='after' />
+
+    </body>
+</procedure>

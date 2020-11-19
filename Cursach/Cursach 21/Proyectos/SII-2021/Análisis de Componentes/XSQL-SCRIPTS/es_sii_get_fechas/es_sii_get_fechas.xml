@@ -1,0 +1,562 @@
+<!-- ======================================================================== -->
+<!--                                                                          -->
+<!-- XSQL es_sii_get_fechas                                                   -->
+<!--                                                                          -->
+<!-- Devuelve las fechas de selección para aplicar a la fecha contable y      -->
+<!-- la fecha límite de presentación (Default = Hoy menos un dia laborable).  -->
+<!--                                                                          -->
+<!-- Consideraciones:                                                         -->
+<!-- ===============                                                          -->
+<!-- 1) En las fases de pruebas (test) la fecha del dia puede no desearse que -->
+<!--    sea la fecha real del sistema, en tal caso puede modificase a través  -->
+<!--    de la función XUDF es_sii_get_today                                   -->
+<!--                                                                          -->
+<!-- 2) Los días laborables a los efectos de la presentación al sistema SII   -->
+<!--    se calculan a partir del calendario convenido "ESP", en caso de       -->
+<!--    desear utilizar un código distinto de "ESP" puede definirlo desde la  -->
+<!--    función XUDF es_sii_get_codcal                                        -->
+<!--                                                                          -->
+<!-- 3) Por defecto las facturas seleccionables para presentar al sistema SII -->
+<!--    son las que se han registrado el último día laborable anterior al dia -->
+<!--    de hoy, según:                                                        -->
+<!--                                                                          -->
+<!--        cimpcont_head_v.fecref <= <m_fecreg_fin/>                         -->
+<!--                                                                          -->
+<!--    Facturas emitidas  = cimpcont_head_v.fecref = cimpcont_head_v.fecdoc           -->
+<!--    Facturas recibidas = cimpcont_head_v.fecref = DATE(cimpcont_head.date_created) -->
+<!--                                                                          -->
+<!-- RETORNO PARÁMETROS:                                                      -->
+<!-- ==================                                                       -->
+<!-- m_feccon_ini:                                                            -->
+<!--    Fecha de inicio de contabilización.    ( cimpcont_head_v.fecha )      -->
+<!-- m_feccon_fin:                                                            -->
+<!--    Fecha de fin de contabilización.       ( cimpcont_head_v.fecha )      -->
+<!-- m_fecreg_fin:                                                            -->
+<!--    Fecha de fin de entrada en el sistema. ( cimpcont_head_v.fecref )     -->
+<!--    (Default = Hoy menos un dia laborable)                                -->
+<!--                                                                          -->
+<!-- SELECCIÓN:                                                               -->
+<!--     cimpcont_head_v.fecha  BETENN m_feccon_ini AND m_feccon_fin AND      -->
+<!--     cimpcont_head_v.fecref <= m_fecreg_fin                               -->
+<!--                                                                          -->
+<!-- ======================================================================== -->
+<xsql-script name='es_sii_get_fechas'>
+
+    <args>
+        <arg name='p_empcode'                   type='string'  info='Company code' />
+    </args>
+
+    <body>
+
+<!-- test
+<set name='p_empcode' type='string'><string>60</string></set>
+<set name='p_empcode' type='string'><string>39</string></set>
+<set name='p_empcode' type='string'><string>43</string></set>
+-->
+
+<!-- ======================================================================== -->
+<!--
+    Test cuatro escenarios:
+    ======================
+    Datos;
+        Fecha HOY               =  08-01-2018
+        Periodos año 2017       = Todos cerrados
+        Periodo enero año 2018  = Abierto
+
+    Escenario 1)
+        Anterior    Actual
+        null        null
+        RESULTADO:
+            (constant_1)    (constant_2)    (constant_3)
+            null    null    null
+
+    Escenario 2)
+        Anterior    Actual
+        null        2018
+        RESULTADO:
+            (constant_1)    (constant_2)    (constant_3)
+            2018-01-01  2018-01-05  2018-01-05
+
+    Escenario 3)
+        Anterior    Actual
+        2017        2018
+        RESULTADO:
+            (constant_1)    (constant_2)    (constant_3)
+            2017-11-01  2018-01-05  2018-01-05
+
+    Escenario 4)
+        Anterior    Actual
+        2017        null
+        RESULTADO:
+            (constant_1)    (constant_2)    (constant_3)
+            2017-11-01  2017-12-31  2018-01-05
+
+    1) Eliminar F.K. a cejercic
+    2) FET: Refer la lògica ...
+    3) FET: Afegir una data de limite de presentaacio: m_fecreg_fin
+    4) Revissar inex cimpcont_head:
+
+
+CREATE INDEX i_cimpcont_head1 ON cimpcont_head(empcode, natfac, fecdoc,       head_status);
+CREATE INDEX i_cimpcont_head2 ON cimpcont_head(empcode, natfac, date_created, head_status);
+
+DROP  INDEX i_cimpcont_head1;
+CREATE INDEX i_cimpcont_head1 ON cimpcont_head(empcode, head_status, natfac, fecdoc);
+CREATE INDEX i_cimpcont_head1 ON cimpcont_head(empcode, head_status, natfac, fecha);
+
+DROP  INDEX i_cimpcont_head2;
+
+NOVA PROPOSTA:
+DROP  INDEX i_cimpcont_head1;
+DROP  INDEX i_cimpcont_head2;
+CREATE INDEX i_cimpcont_head1 ON cimpcont_head(empcode, head_status, fecha,  orden, natfac);
+
+no: CREATE INDEX i_cimpcont_head2 ON cimpcont_head(empcode, head_status, date_created, );
+
+-->
+<!-- ======================================================================== -->
+
+        <!-- ======================================================================== -->
+        <!-- Obtenemos la fecha del dia si estamos en producción o la fecha           -->
+        <!-- definida en la columna es_sii_test.is_today si estamos en modo test.     -->
+        <!-- ======================================================================== -->
+        <set name='m_today'>
+            <execute-function name='es_sii_get_today' return-type='date' />
+        </set>
+
+        <!-- ======================================================================== -->
+        <!-- El número de dias de retraso en la entrega al sistema SII por defecto    -->
+        <!-- son CERO dias.                                                           -->
+        <!--                                                                          -->
+        <!-- Este número puede customizarse a conveniencia del cliente, por           -->
+        <!-- ejemplo para el caso en que no se deseen presentar al sistame SII        -->
+        <!-- las facturas registradas ayer restaríamos un dia natural laborable       -->
+        <!-- a la fecha del dia de proceso, evitando así la entrega de las            -->
+        <!-- facturas contabilizadas con fecha de ayer, para ello asignaríamos        -->
+        <!-- valor 1 (positivo) a la variable m_delay_days para no entregar las       -->
+        <!-- facturas contabilizadas con fecha de ayer.                               -->
+        <!--                                                                          -->
+        <!-- Con ello, por un lado, obtenemos la ventaja de un dia para               -->
+        <!-- verificar el registro de las facturas y la desventaja de perder un       -->
+        <!-- dia de plazo en las presentaciones.                                      -->
+        <!-- ======================================================================== -->
+        <set name='m_delay_days'>0</set>
+
+        <!-- ======================================================================== -->
+        <!-- Meses de barrido respecto la fecha                                       -->
+        <!-- Número de meses de barrido. Se tratat de asegurar presentar la totalidad -->
+        <!-- de los registros evitando a su vez barrer siempre desde el 01-01-yyyy    -->
+        <!-- ======================================================================== -->
+        <set name='m_prevent_months'>2</set>
+
+        <!-- ======================================================================== -->
+        <!--                                                                          -->
+        <!-- ======================================================================== -->
+        <include code='es_sii_get_fechas' name='default_delay' />
+
+        <!-- ======================================================================== -->
+        <!-- Añadimos un dia fijo para excluir siempre el dia de hoy puesto que       -->
+        <!-- la función ccalfesh_add_business_days siempre considera como             -->
+        <!-- efectivo el dia de HOY, pero el sistema SII el dia de HOY no lo          -->
+        <!-- considera en el cálculo del plazo de días.                               -->
+        <!-- ======================================================================== -->
+        <set name='m_total_delay_days'><add><m_delay_days/><number>1</number></add></set>
+
+        <!-- ======================================================================== -->
+        <!-- Calendario festividades principales de España                            -->
+        <!-- Por defecto es: ESP                                                      -->
+        <!-- ======================================================================== -->
+        <set name='m_codcal'>
+            <execute-function name='es_sii_get_codcal' return-type='char' />
+        </set>
+
+        <!-- ======================================================================== -->
+        <!-- Calcula la fecha límite de presentación.                                 -->
+        <!-- Por defecto las facturas registradas HOY no se presentan al SII para     -->
+        <!-- facilitar las comprobaciones. Este dia de DELAY puede ser customizado    -->
+        <!-- en el sentido de cancelarlo o ampliarlo.                                 -->
+        <!--                                                                          -->
+        <!-- Es el participante en la query:                                          -->
+        <!--     cimpcont_head_v.fecref <= <m_fecreg_fin/>                            -->
+        <!--                                                                          -->
+        <!-- ======================================================================== -->
+        <set name='m_fecreg_fin' type='date'>
+            <execute-function name='ccalfesh_add_business_days' return-type='date'>
+                <m_codcal/>
+                <m_today/>
+                <neg><m_total_delay_days/></neg>        <!-- Siempre resta N días laborables. -->
+            </execute-function>
+        </set>
+
+        <!-- ======================================================================== -->
+        <!-- Llamamos al proceso cejercic_verify para garantizar la existencia del    -->
+        <!-- ejercicio contable para la fecha del día, en caso de no existir lo       -->
+        <!-- creará automáticamente siguiendo el modelo del ejercicio precedente.     -->
+        <!-- ======================================================================== -->
+        <execute-procedure name='cejercic_verify'>
+            <in>
+                <p_empcode/>
+                <m_today/>
+            </in>
+            <out>
+                <var name='cejercic_numero'/>
+                <var name='cejercic_numasi'/>
+                <var name='cejercic_user_auth'/>
+                <var name='cejercic_estado'/>
+                <var name='cperiodo_codigo'/>
+                <var name='cperiodo_fecini'/>
+                <var name='cperiodo_fecfin'/>
+                <var name='cperiodo_estado'/>
+                <var name='cperiodo_estcos'/>
+            </out>
+        </execute-procedure>
+
+        <!-- ======================================================================== -->
+        <!-- Determina si hay presentación SII en el año actual.                      -->
+        <!-- ======================================================================== -->
+        <select prefix='m_curr_'>
+            <columns>
+                es_sii_admon_inspectora.ejercicio,
+                es_sii_admon_inspectora.admon,
+               (SELECT MIN( <mdy m='cimppers.period' d='1' y='cimppers.ejerci' /> )
+                  FROM cimppers
+                 WHERE cimppers.empcode = es_sii_admon_inspectora.empcode
+                   AND cimppers.ejerci  = es_sii_admon_inspectora.ejercicio
+                   AND cimppers.estado  = 'A') AS fecini
+            </columns>
+            <from table='es_sii_admon_inspectora'/>
+            <where>
+                    empcode   = <p_empcode/>
+                AND ejercicio = <year><m_today/></year>
+            </where>
+        </select>
+
+        <!-- ======================================================================== -->
+        <!-- Determina si hay presentación SII en el año anterior.                    -->
+        <!-- ======================================================================== -->
+        <select prefix='m_prev_'>
+            <columns>
+                es_sii_admon_inspectora.ejercicio,
+                es_sii_admon_inspectora.admon,
+               (SELECT MIN( <mdy m='cimppers.period' d='1' y='cimppers.ejerci' /> )
+                  FROM cimppers
+                 WHERE cimppers.empcode = es_sii_admon_inspectora.empcode
+                   AND cimppers.ejerci  = es_sii_admon_inspectora.ejercicio
+                   AND cimppers.estado  = 'A') AS fecini
+            </columns>
+            <from table='es_sii_admon_inspectora'/>
+            <where>
+                    empcode   = <p_empcode/>
+                AND ejercicio = <year><m_today/></year> - 1
+            </where>
+        </select>
+
+        <!-- ======================================================================== -->
+        <!-- Escenario 1)                                                             -->
+        <!--    Censo SII año anteior = No                                            -->
+        <!--    Censo SII año actual  = No                                            -->
+        <!-- ======================================================================== -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_prev_ejercicio/></isnull>
+                    <isnull><m_curr_ejercicio/></isnull>
+                </and>
+            </expr>
+            <then>
+                <set name='m_feccon_ini'><null/></set>
+                <set name='m_feccon_fin'><null/></set>
+                <set name='m_fecreg_fin'><null/></set>
+                <return>
+                    <m_feccon_ini/>
+                    <m_feccon_fin/>
+                    <m_fecreg_fin/>
+                </return>
+            </then>
+        </if>
+
+null    null
+null    2018
+2017    2018
+2017    null
+
+        <!-- ======================================================================== -->
+        <!-- Escenario 2)                                                             -->
+        <!--    Censo SII año anteior = No                                            -->
+        <!--    Censo SII año actual  = Si                                            -->
+        <!-- ======================================================================== -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_prev_ejercicio/></isnull>
+                    <isnotnull><m_curr_ejercicio/></isnotnull>
+                </and>
+            </expr>
+            <then>
+                <set name='m_feccon_ini'><m_curr_fecini/></set>
+                <set name='m_feccon_fin'><m_fecreg_fin/></set>
+
+                <!-- ======================================================================== -->
+                <!-- Fija la fecha de inicio razonable.                                       -->
+                <!-- Retroce N meses y fija dia 1 respecto a la fecha del primer periodo      -->
+                <!-- abierto o respecto a la fecha límite de presentación (m_fecreg_fin).     -->
+                <!-- ======================================================================== -->
+                <if>
+                    <expr>
+                        <isnull><m_feccon_ini/></isnull>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><m_fecreg_fin/></set>
+                    </then>
+                </if>
+                <set name='m_feccon_ini'>
+                    <sub>
+                        <date.mdy><date.month><m_feccon_ini/></date.month><number>1</number><date.year><m_feccon_ini/></date.year></date.mdy>
+                        <date.units type='m'><m_prevent_months/></date.units>
+                    </sub>
+                </set>
+
+                <!-- ======================================================================== -->
+                <!-- La fecha de inicio no puede ser menor a uno de enero del año actual.     -->
+                <!-- ======================================================================== -->
+                <set name='m_feccon_control'>
+                    <date.mdy><number>1</number><number>1</number><m_curr_ejercicio/></date.mdy>
+                </set>
+                <if>
+                    <expr>
+                        <lt><m_feccon_ini/><m_feccon_control/></lt>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================== -->
+                        <!-- Controlamos el límite de la fecha de inicio.                             -->
+                        <!-- ======================================================================== -->
+                        <set name='m_feccon_ini'><m_feccon_control/></set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================== -->
+        <!-- Escenario 3)                                                             -->
+        <!--    Censo SII año anteior = Si                                            -->
+        <!--    Censo SII año actual  = Si                                            -->
+        <!-- ======================================================================== -->
+        <if>
+            <expr>
+                <and>
+                    <isnotnull><m_prev_ejercicio/></isnotnull>
+                    <isnotnull><m_curr_ejercicio/></isnotnull>
+                </and>
+            </expr>
+            <then>
+                <set name='m_feccon_ini'><ifnull><m_prev_fecini/><m_curr_fecini/></ifnull></set>
+                <set name='m_feccon_fin'><m_fecreg_fin/></set>
+
+                <!-- ======================================================================== -->
+                <!-- Fija la fecha de inicio razonable.                                       -->
+                <!-- Retroce N meses y fija dia 1 respecto a la fecha del primer periodo      -->
+                <!-- abierto o respecto a la fecha límite de presentación (m_fecreg_fin).     -->
+                <!-- ======================================================================== -->
+                <if>
+                    <expr>
+                        <isnull><m_feccon_ini/></isnull>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><m_fecreg_fin/></set>
+                    </then>
+                </if>
+                <set name='m_feccon_ini'>
+                    <sub>
+                        <date.mdy><date.month><m_feccon_ini/></date.month><number>1</number><date.year><m_feccon_ini/></date.year></date.mdy>
+                        <date.units type='m'><m_prevent_months/></date.units>
+                    </sub>
+                </set>
+
+                <!-- ======================================================================== -->
+                <!-- La fecha de inicio no puede ser menor a uno de enero del año anterior.   -->
+                <!-- ======================================================================== -->
+                <set name='m_feccon_control'>
+                    <date.mdy><number>1</number><number>1</number><m_prev_ejercicio/></date.mdy>
+                </set>
+                <if>
+                    <expr>
+                        <lt><m_feccon_ini/><m_feccon_control/></lt>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================== -->
+                        <!-- Controlamos el límite de la fecha de inicio.                             -->
+                        <!-- ======================================================================== -->
+                        <set name='m_feccon_ini'><m_feccon_control/></set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================== -->
+        <!-- Escenario 4)                                                             -->
+        <!--    Censo SII año anteior = Si                                            -->
+        <!--    Censo SII año actual  = No                                            -->
+        <!-- ======================================================================== -->
+        <if>
+            <expr>
+                <and>
+                    <isnotnull><m_prev_ejercicio/></isnotnull>
+                    <isnull><m_curr_ejercicio/></isnull>
+                </and>
+            </expr>
+            <then>
+                <set name='m_feccon_ini'><m_prev_fecini/></set>
+                <set name='m_feccon_fin'><date.mdy><number>12</number><number>31</number><m_prev_ejercicio/></date.mdy></set>
+
+                <!-- ======================================================================== -->
+                <!-- Fija la fecha de inicio razonable.                                       -->
+                <!-- Retroce N meses y fija dia 1 respecto a la fecha del primer periodo      -->
+                <!-- abierto o respecto a la fecha límite de presentación (m_fecreg_fin).     -->
+                <!-- ======================================================================== -->
+                <if>
+                    <expr>
+                        <isnull><m_feccon_ini/></isnull>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><m_fecreg_fin/></set>
+                    </then>
+                </if>
+                <set name='m_feccon_ini'>
+                    <sub>
+                        <date.mdy><date.month><m_feccon_ini/></date.month><number>1</number><date.year><m_feccon_ini/></date.year></date.mdy>
+                        <date.units type='m'><m_prevent_months/></date.units>
+                    </sub>
+                </set>
+
+                <!-- ======================================================================== -->
+                <!-- La fecha de inicio no puede ser menor a uno de enero del año anterior.   -->
+                <!-- ======================================================================== -->
+                <set name='m_feccon_control'>
+                    <date.mdy><number>1</number><number>1</number><m_prev_ejercicio/></date.mdy>
+                </set>
+                <if>
+                    <expr>
+                        <lt><m_feccon_ini/><m_feccon_control/></lt>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================== -->
+                        <!-- Controlamos el límite de la fecha de inicio.                             -->
+                        <!-- ======================================================================== -->
+                        <set name='m_feccon_ini'><m_feccon_control/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================== -->
+                <!-- La fecha de fin no puede ser mayor a 31 de diciembre del año anterior.   -->
+                <!-- ======================================================================== -->
+                <set name='m_feccon_control'>
+                    <date.mdy><number>12</number><number>31</number><m_prev_ejercicio/></date.mdy>
+                </set>
+                <if>
+                    <expr>
+                        <gt><m_feccon_fin/><m_feccon_control/></gt>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================== -->
+                        <!-- Controlamos el límite de la fecha de inicio.                             -->
+                        <!-- ======================================================================== -->
+                        <set name='m_feccon_fin'><m_feccon_control/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================== -->
+                <!-- La fecha de inicio no puede ser mayor a 31 de diciembre del año anterior,-->
+                <!-- en tal caso ya ha habido tiempo para presentar todas las facturas del    -->
+                <!-- año anterior.                                                            -->
+                <!-- ======================================================================== -->
+                <if>
+                    <expr>
+                        <gt><m_feccon_ini/><m_feccon_fin/></gt>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><null/></set>
+                        <set name='m_feccon_fin'><null/></set>
+                        <set name='m_fecreg_fin'><null/></set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Determina si estamos en modo PRUEBAS (test)                             -->
+        <!-- ======================================================================= -->
+        <call name='es_sii_get_is_test' into='es_sii_test_is_test' />
+
+        <!-- ======================================================================= -->
+        <!-- Excepto si estamos en test fijamos la fecha de inicio según:            -->
+        <!--     AEAT:                                  01-07-2017                   -->
+        <!--     Diputaciones forales vascas y navarra: 01-01-2018                   -->
+        <!--                                                                         -->
+        <!-- ATENCIÓN AEAT:                                                          -->
+        <!-- La presentación de la información del primer semestre 2017 deberá       -->
+        <!-- realizarse ejecutando el proceso de presentación de forma manual sin    -->
+        <!-- los condicionantes de esta función.                                     -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <not><es_sii_test_is_test/></not>
+            </expr>
+            <then>
+                <!-- La AEAT (Territorio común) inicia entregas el 01-07-2017 -->
+                <if>
+                    <expr>
+                        <eq><m_curr_ejercicio/>2017</eq>
+                        <and/>
+                        <eq><m_curr_admon/><string>00</string></eq>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><date.mdy><number>7</number><number>1</number>2017</date.mdy></set>
+                    </then>
+                </if>
+
+                <!-- Las diputaciones forales del país vasco y de navarra inician entregas el 01-01-2018 -->
+                <if>
+                    <expr>
+                        <eq><m_curr_ejercicio/>2018</eq>
+                        <and/>
+                        <ne><m_curr_admon/><string>00</string></ne>
+                    </expr>
+                    <then>
+                        <set name='m_feccon_ini'><date.mdy><number>1</number><number>1</number>2018</date.mdy></set>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Si la fecha de inicio es mayor que la fecha de fin detiene el proceso.  -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <gt><m_feccon_ini/><m_feccon_fin/></gt>
+            </expr>
+            <then>
+                <exception>Fecha de inicio [<m_feccon_ini/>] mayor que fecha de fin  [<m_feccon_fin/>] para la empresa [<p_empcode/>].</exception>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include code='es_sii_get_fechas' name='after' />
+
+
+        <!-- ======================================================================== -->
+        <!--                                                                          -->
+        <!-- ======================================================================== -->
+        <return>
+            <m_feccon_ini/>     <!-- Fecha de inicio de contabilización.    ( cimpcont_head_v.fecha )   -->
+            <m_feccon_fin/>     <!-- Fecha de fin de contabilización.       ( cimpcont_head_v.fecha )   -->
+            <m_fecreg_fin/>     <!-- Fecha de fin de entrada en el sistema. ( cimpcont_head_v.fecref )  -->
+        </return>
+
+    </body>
+</xsql-script>

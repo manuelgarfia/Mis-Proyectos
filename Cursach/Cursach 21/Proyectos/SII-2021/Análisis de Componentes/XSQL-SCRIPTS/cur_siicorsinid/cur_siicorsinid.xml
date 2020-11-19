@@ -1,0 +1,88 @@
+<xsql-script name='cur_siicorsinid'>
+	<args>
+		<arg name='p_empcode'	type='string'/>
+	</args>
+	<body>
+		
+			<!-- =============================================================== -->
+			<!-- Cursor Principal de las facturas en error por ID                -->
+			<!-- =============================================================== -->
+			
+			<foreach>
+				<select prefix='m_'>
+					<columns>cimpcont_head.orden,es_sii_facturas.head_seqno,es_sii_facturas.numfactura,es_sii_facturas.fechafactura,es_sii_facturas.empcode, 
+					es_sii_facturas.niftitular, es_sii_facturas.libro, es_sii_facturas.idemisor,
+					es_sii_facturas.erp_estado,es_sii_facturas.sii_estado,es_sii_responses_error.codigoerror,es_sii_responses_error.descripcionerror
+					</columns>
+					<from table='es_sii_facturas'>
+						<join type='inner' table='cimpcont_head'>
+							<on>es_sii_facturas.head_seqno = cimpcont_head.head_seqno</on>
+						</join>
+						<join type='inner' table='es_sii_requests'>
+							<on>es_sii_facturas.id_ws_request = es_sii_requests.id_ws_request</on>
+						</join>
+						<join type='inner' table='es_sii_responses_error'>
+							<on>es_sii_requests.id_ws_request  = es_sii_responses_error.id_ws_request</on>
+							<on>es_sii_facturas.niftitular     = es_sii_responses_error.niftitular</on>
+							<on>es_sii_facturas.libro          = es_sii_responses_error.libro</on>
+							<on>es_sii_facturas.idemisor       = es_sii_responses_error.idemisor</on>
+							<on>es_sii_facturas.numfactura     = es_sii_responses_error.numfactura</on>
+							<on>es_sii_facturas.fechafactura   = es_sii_responses_error.fechafactura</on>
+						</join>
+						
+					</from>
+					<where>es_sii_facturas.erp_estado = 'E' AND es_sii_facturas.sii_estado = '3'  AND es_sii_responses_error.codigoerror = '1100'
+					AND es_sii_facturas.empcode = <p_empcode/>
+					</where>
+				</select>
+				<do>
+					<select prefix='m_'>
+						<columns>nombre</columns>
+						<from table='cimpcont'/>
+						<where>orden = <m_orden/></where>
+					</select>
+				
+					<!-- =========================================================================================== -->
+					<!-- Simulamos botón cambiar Nombre y CIF 2018                                                   -->
+					<!-- =========================================================================================== -->
+				
+					<call name='es_sii_change_cif_nombre_18'>
+						<m_head_seqno/>
+						<string>0</string>
+						<m_nombre/>
+					</call>
+
+					<!-- =========================================================================================== -->
+					<!-- Simulamos botón Preparar nueva entrega                                                      -->
+					<!-- =========================================================================================== -->
+
+					<update table='es_sii_facturas'>
+						<column name='erp_estado'>P</column>        <!-- Pendiente de entrega -->
+						<column name='tipocomunicacion' text='true'>
+							(CASE WHEN check_sii_estado IN('1','2')
+									   <!-- Protege A4 Modificación Factura Régimen de Viajeros -->
+								  THEN (case when tipocomunicacion = 'A0' then 'A1' else tipocomunicacion end)
+								  ELSE 'A0'
+							  END)
+						</column>
+						<column name='sii_estado'><null/></column>
+						<column name='id_ws_request'><null/></column>
+						<column name='user_updated'><system.user.getCode/></column>
+						<column name='date_updated'><date.current/></column>
+						<where>
+								es_sii_facturas.niftitular     = <m_niftitular/>
+							AND es_sii_facturas.libro          = <m_libro/>
+							AND es_sii_facturas.idemisor       = <m_idemisor/>
+							AND es_sii_facturas.numfactura     = <m_numfactura/>
+							AND es_sii_facturas.fechafactura   = <m_fechafactura/>
+							AND es_sii_facturas.erp_estado     = 'E'
+							AND (check_sii_estado IS NULL OR (check_sii_estado IS NOT NULL AND check_tipocomunicacion != 'B'))
+						</where>
+					</update>
+				
+					<println><m_numfactura/>-<m_nombre/></println>
+				</do>				
+			</foreach>
+	
+	</body>
+</xsql-script>

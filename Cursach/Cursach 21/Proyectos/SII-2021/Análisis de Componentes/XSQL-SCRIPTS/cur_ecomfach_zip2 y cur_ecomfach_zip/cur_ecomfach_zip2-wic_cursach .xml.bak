@@ -1,0 +1,79 @@
+<xsql-script name='cur_ecomfach_zip2'>
+    <args>
+        <arg name='p_codpro' type='string' />
+        <arg name='p_fecini'  type='date' />
+        <arg name='p_fecfin'  type='date' />
+    </args>       
+    <body>
+
+       <file.out.open id='out1' append='true'>
+           <file name='test.zip' type='disktool' />
+       </file.out.open>
+        <map name='ficheros'/>  
+       
+<foreach>
+      <select prefix ='m_'>
+         <columns>
+            cur_ecomfach.cabid        
+         </columns>
+         <from table = 'gcomfach'>
+            <join table='cur_ecomfach'>
+              <on>cur_ecomfach.docser = gcomfach.docser</on>
+            </join>
+         </from>
+         <where>
+            gcomfach.tercer = <p_codpro/>
+            AND
+            gcomfach.feccon BETWEEN <p_fecini/> AND <p_fecfin/>      
+		 </where>
+      </select>
+      <do>
+
+  <select prefix='m_'>
+        <columns>
+           file_data file_data1, file_name file_name1
+        </columns>
+        <from table='cur_ecomfach_docs' />
+        <where>
+           cabid = <m_cabid/>
+        </where>
+    </select>
+
+
+       <file.bytes.write append='true' encoding-dst='UTF-8'>
+           <file name='#m_file_name1' type='temp' />
+           <m_file_data1/>
+       </file.bytes.write> 
+
+<!--
+    <select prefix='m_'>
+        <columns>
+           file_data file_data2, file_name file_name2
+        </columns>
+        <from table='cur_ecomfach_docs' />
+        <where>
+           cabid = 3289
+        </where>
+    </select>
+-->
+<!--
+       <file.bytes.write append='true' encoding-dst='UTF-8'>
+           <file name='#m_file_name2' type='temp' />
+           <m_file_data2/>
+       </file.bytes.write>  
+-->
+
+
+      <map.put name='ficheros'><m_file_name1/><file name='#m_file_name1' type='temp' /></map.put>
+                 
+       <file.out.write id='out1' append='true'>
+           <zip.zip>
+             <ficheros/>
+           </zip.zip>
+       </file.out.write>
+        
+        
+  </do>         
+</foreach>         
+    </body>            
+</xsql-script>

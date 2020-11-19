@@ -1,0 +1,911 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_mr_lria_18.                                                 -->
+<!--                                                                         -->
+<!-- Proceso principal para la generación de los mensajes de solicitud del   -->
+<!-- sistema SII correspondientes a las Facturas Emitidas y Recibidas.       -->
+<!--                                                                         -->
+<!-- Package: "es_sii_mr"     mr = Make Requests                             -->
+<!--                                                                         -->
+<!-- es_sii_mr_lrfe_lrfr                                                     -->
+<!--     es_sii = Módulo SII                                                 -->
+<!--     mr     = Make Requests                                              -->
+<!--     lrfe   = Libro Registro Facturas Emitidas                           -->
+<!--     lrfr   = Libro Registro Facturas Recibidas                          -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_mr_lria_18'>
+    <args>
+        <arg name='p_modo'                  type='smallint' info='Tareas a ejecutar. 2: Generar mensajes or 3: Generar y entregar mensajes' />
+        <arg name='p_str_query'             type='string'   info='Query' />
+        <arg name='p_rowid'                 type='integer'   info='Rowid' />
+    </args>
+    <body>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <system.getDebug/>
+            </expr>
+            <then>
+                <println>LOG XSQL:[<system.function.getName/>] [<date.current/>] =========================</println>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <or>
+                    <isnull><p_str_query/></isnull>
+                    <eq><string.length><p_str_query/></string.length>0</eq>
+                </or>
+            </expr>
+            <then>
+                <set name='p_str_query'><string>1 = 1</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- local_str_fixlen                                                        -->
+        <!--                                                                         -->
+        <!-- Función filro para strings:                                             -->
+        <!--     1) Depura los caracteres "Ampersand" y "Menor que"                  -->
+        <!--     2) Devuelve el string limitado a la longitud máxima                 -->
+        <!-- ======================================================================= -->
+        <function name='local_str_fixlen'>
+            <args>
+                <arg name='p_text'              type='string' />
+                <arg name='p_maxlen'            type='smallint' />
+            </args>
+            <body>
+
+                <set name='m_applyfilters'><false/></set>
+
+                <!-- ======================================================================= -->
+                <!-- Atención realizar la llamada a la función icon_char_filter antes que    -->
+                <!-- nada para evitar convertir un tag &amp; en &AMP; que inutilizaría el    -->
+                <!-- contenido.                                                              -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <m_applyfilters/>
+                    </expr>
+                    <then>
+                        <call name='icon_char_filter' into='p_text'>
+                            <string>es_sii</string>
+                            <p_text/>
+                        </call>
+                    </then>
+                </if>
+
+                <!-- Ejemplo:
+                <set name='bak_cimpcont_nombre'><![CDATA[C&A <BUYING< GMBH & CO. KG.]]></set>
+                -->
+
+                <!-- Sustituye caracter "Ampersand"
+                <set name='m_result'><p_text/></set>
+                <set name='m_regexp'><![CDATA[&]]></set>
+                <set name='m_amp'><![CDATA[&amp;]]></set>
+                <set name='m_result'><string.replaceAll><m_result /><m_regexp/><m_amp/></string.replaceAll></set>
+
+                     Sustituye caracter "Menor que"
+                <set name='m_regexp'><![CDATA[<]]></set>
+                <set name='m_amp'><![CDATA[&lt;]]></set>
+                <set name='m_result'><string.replaceAll><m_result /><m_regexp/><m_amp/></string.replaceAll></set>
+                <set name='p_text'><m_result/></set>
+                -->
+
+                <!-- Ejemplo:
+                <set name='bak_cimpcont_nombre'><![CDATA[C&A <BUYING< GMBH & CO. KG.]]></set>
+                -->
+                <!-- Sustituye caracteres "Ampersand" , "Menor que", etc -->
+                <set name='p_text'><string.encode type='xml'><p_text/></string.encode></set>
+
+                <!-- Recorta string -->
+                <if>
+                    <expr>
+                        <gt><string.length><p_text/></string.length><p_maxlen/></gt>
+                    </expr>
+                    <then>
+                        <set name='p_text'><string.substring><p_text/><number>0</number><p_maxlen/></string.substring></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return><p_text/></return>
+            </body>
+        </function>
+
+        <!-- ======================================================================= -->
+        <!-- Proceso principal para la generación de los mensajes de las facturas    -->
+        <!-- emitidas y recibidas:                                                   -->
+        <!--     1) Altas y modificaciones                                           -->
+        <!--     2) Bajas                                                            -->
+        <!-- ======================================================================= -->
+        <function name='local_mr_lrfe_refcat15_one_message'>
+            <args>
+                <arg name='p_entregar_a_sii'        type='boolean' />   <!-- true / false -->
+                <arg name='p_str_query'             type='string' />
+                <arg name='p_rowid'                 type='integer' />
+                <arg name='p_ejercicio'             type='integer' />
+                <arg name='p_admon'                 type='string' />
+                <arg name='p_empcode'               type='string' />
+                <arg name='p_niftitular'            type='string' />
+                <arg name='p_nombre_razon_titular'  type='string' />
+                <arg name='p_idversionsii'          type='string' />
+                <arg name='p_libro'                 type='string' />
+                <arg name='p_tipocomunicacion'      type='string' />    <!-- A0  Alta de facturas/registro                                -->
+                                                                        <!-- A1  Modificación de facturas/registros (errores registrales) -->
+                                                                        <!-- A4  Modificación Factura Régimen de Viajeros                 -->
+                                                                        <!-- B   Baja. ( Adaptación Axional )                             -->
+            </args>
+            <body>
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <system.getDebug/>
+                    </expr>
+                    <then>
+                        <println>LOG:[<system.function.getName/>] [<date.current/>]</println>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Letra método: S: Suministro ; A: Anulación / Baja                       -->
+                <!-- ======================================================================= -->
+                <set name='m_method_char'><string>S</string></set>      <!-- Suministro -->
+                <if>
+                    <expr>
+                        <eq><p_tipocomunicacion/>B</eq>
+                    </expr>
+                    <then>
+                        <set name='m_method_char'><string>A</string></set>      <!-- Anulación / Baja -->
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Método                                                                  -->
+                <!--                                                                         -->
+                <!--     method_code     service_name               method_name                   -->
+                <!--     ES_SII_LRFES    SuministroFactEmitidas     SuministroLRFacturasEmitidas  -->
+                <!--     ES_SII_LRFEA    SuministroFactEmitidas     AnulacionLRFacturasEmitidas   -->
+                <!--     ES_SII_LRFRS    SuministroFactRecibidas    SuministroLRFacturasRecibidas -->
+                <!--     ES_SII_LRFRA    SuministroFactRecibidas    AnulacionLRFacturasRecibidas  -->
+                <!--     ES_SII_LRIAS                               SuministroLRInmueblesAdicionales -->
+                <!-- ======================================================================= -->
+                <set name='m_method_code'>ES_SII_LRIAS</set>
+
+                <!-- Sustituimos Anulacion por Baja Se trata de una diferencia entre el nombre del método y el nombre de la operacion. -->
+                <select prefix='m_' required='Methode [${m_method_code}] notfound!'>
+                    <columns>
+                        REPLACE(method_name, "Anulacion", "Baja") operation
+                    </columns>
+                    <from table='cwsi_methods' />
+                    <where>
+                        method_code = <m_method_code />
+                    </where>
+                </select>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <system.getDebug/>
+                    </expr>
+                    <then>
+                        <println>LOG:[<system.function.getName/>] [<date.current/>] START BUILD TEMP TABLE:[tmp_es_sii_fras]</println>
+                    </then>
+                </if>
+
+                <!-- ========================================================================= -->
+                <!-- Tabla temporal con el detalle de las facturas agrupadas en grupos de      -->
+                <!-- 10000 registros que es el límite actual de la presentación al sistema SII -->
+                <!-- También será de utilidad como foto estática durante el tiempo de duración -->
+                <!-- de ejecución de este proceso para controlar posibles cambios de contexto  -->
+                <!-- de las facturas.                                                          -->
+                <!-- ========================================================================= -->
+                <drop table='@tmp_es_sii_fras' onexception='ignore' />
+                <table name='@tmp_es_sii_fras' temp='yes'>
+                    <column name='group_num'       type='smallint'              required='y' />
+                    <column name='head_seqno'      type='integer'                            />     <!-- Admite NULL en Bajas -->
+                    <column name='niftitular'      type='char'     size='9'     required='y' />
+                    <column name='libro'           type='char'     size='2'     required='y' />
+                    <column name='idemisor'        type='varchar'  size='24'    required='y' />
+                    <column name='numfactura'      type='varchar'  size='60'    required='y' />
+                    <column name='fechafactura'    type='date'                  required='y' />
+                    <column name='message_error'   type='smallint' default='0'  required='y' />
+                </table>
+                <index name='i_@tmp_es_sii_fras1' table='@tmp_es_sii_fras' columns='niftitular, libro, idemisor, numfactura, fechafactura' unique='y' />
+                <index name='i_@tmp_es_sii_fras2' table='@tmp_es_sii_fras' columns='group_num, niftitular, libro, idemisor, numfactura, fechafactura' unique='y' />
+
+                <!-- ======================================================================= -->
+                <!-- Registra las facturas a procesar en grupos de 10000                     -->
+                <!-- ======================================================================= -->
+                <set name='m_count_fras'>0</set>
+                <set name='m_group_num'>1</set>
+
+                <foreach>
+                    <select prepare='false' prefix='m_'>
+                        <columns>
+                            *
+                        </columns>
+                        <from table='es_sii_facturas' />
+                        <where>
+                                erp_estado       = 'E'      <!-- Facturas ya entregadas                         -->
+                            AND sii_estado       = 1        <!-- Respuesta Correcta                             -->
+                            AND refcat15         = 1        <!-- Facturas con mas de 15 referencias catastrales -->
+                            AND id_ws_request_refcat15 IS NULL
+                            AND ejercicio        = <p_ejercicio/>
+                            <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                            AND empcode          = <p_empcode/>
+                            AND niftitular       = <p_niftitular/>
+                            AND libro            = <p_libro/>
+                            AND tipocomunicacion = <p_tipocomunicacion/>
+                            AND <p_str_query mode='unquoted'/>
+                            <string mode='unquoted'>
+                                <ifthen>
+                                    <expr><isnotnull><p_rowid /></isnotnull></expr>
+                                    <sql.xsql2text>
+                                        <xsql-text>AND <rowid table='es_sii_facturas' /> = <p_rowid /></xsql-text>
+                                    </sql.xsql2text>
+                                    <string />
+                                </ifthen>                    
+                            </string>
+                        </where>
+                        <order>niftitular, libro, idemisor, numfactura, fechafactura</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_count_fras'><add><m_count_fras/>1</add></set>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <insert table='@tmp_es_sii_fras' prepare-cache='false'>    <!-- fcm/jrl 22-06-2017 Cambiado prepare-cache='true' a false -->
+                            <column name='group_num'><m_group_num/></column>
+                            <column name='head_seqno'><m_head_seqno/></column>
+                            <column name='niftitular'><m_niftitular/></column>
+                            <column name='libro'><m_libro/></column>
+                            <column name='idemisor'><m_idemisor/></column>
+                            <column name='numfactura'><m_numfactura/></column>
+                            <column name='fechafactura'><m_fechafactura/></column>
+                        </insert>
+
+                        <!-- ======================================================================= -->
+                        <!-- Cada 10000 facturas generar nuevo grupo                                 -->
+                        <!--                                                                         -->
+                        <!-- 2.3. ¿Cuál es el número máximo de registros de facturación por envío?   -->
+                        <!-- 10.000 registros.                                                       -->
+                        <!-- ======================================================================= -->
+                        <set name='m_limite_fras'>10000</set>
+                        <if>
+                            <expr><eq><m_count_fras/><m_limite_fras/></eq></expr>
+                            <then>
+                                <set name='m_count_fras'>0</set>
+                                <set name='m_group_num'><add><m_group_num/>1</add></set>
+                            </then>
+                        </if>
+                    </do>
+                </foreach>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <system.getDebug/>
+                    </expr>
+                    <then>
+                        <println>LOG:[<system.function.getName/>] [<date.current/>] END BUILD TEMP TABLE:[tmp_es_sii_fras]</println>
+                        <println>LOG:[<system.function.getName/>] [<date.current/>] START BUILD XML MESSAGES</println>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Cursor por número de grupo de facturas                                  -->
+                <!-- ======================================================================= -->
+
+                <set name='m_message_body'><string /></set>
+                <foreach>
+                    <select prefix='g_'>
+                        <columns>group_num, COUNT(*) AS group_regs</columns>
+                        <from table='@tmp_es_sii_fras' />
+                        <group>group_num</group>
+                        <order>group_num</order>
+                    </select>
+                    <do>
+
+                        <!-- ======================================================================= -->
+                        <!-- Inicializa m_counter dentro del lote                                    -->
+                        <!-- ======================================================================= -->
+                        <set name='m_counter'><util.counter step='1000'  max='${g_group_regs}' /></set>
+
+                        <!-- ======================================================================= -->
+                        <!-- Build factura                                                           -->
+                        <!-- ======================================================================= -->
+                        <set name='m_es_sii_facturas_rows_proc'>0</set>
+                        <set name='m_num_errors'>0</set>
+                        <foreach>
+                            <select prefix='es_sii_facturas_' prepare-cache='false'>    <!-- fcm/jrl 22-06-2017 Añadido prepare-cache='false' -->
+                                <columns>
+                                    @tmp_es_sii_fras.head_seqno AS head_seqno_tmp,
+                                    es_sii_facturas.*,
+                                    cimpcont_head_aux.inm_refer_catastral
+                                </columns>
+                                <from table='@tmp_es_sii_fras'>
+                                    <join table='es_sii_facturas'>
+                                        <on>@tmp_es_sii_fras.niftitular      = es_sii_facturas.niftitular</on>
+                                        <on>@tmp_es_sii_fras.libro           = es_sii_facturas.libro</on>
+                                        <on>@tmp_es_sii_fras.idemisor        = es_sii_facturas.idemisor</on>
+                                        <on>@tmp_es_sii_fras.numfactura      = es_sii_facturas.numfactura</on>
+                                        <on>@tmp_es_sii_fras.fechafactura    = es_sii_facturas.fechafactura</on>
+                                        <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                        <on>es_sii_facturas.empcode          = <p_empcode/></on>
+                                        <on>es_sii_facturas.tipocomunicacion = <p_tipocomunicacion/></on>
+                                        <on>es_sii_facturas.erp_estado = 'E'</on>
+                                        <on>es_sii_facturas.sii_estado = 1</on>
+                                        <on>es_sii_facturas.refcat15   = 1</on>
+                                        <on>es_sii_facturas.id_ws_request_refcat15 IS NULL</on>
+                                    </join>
+                                    <join type='left' table='cimpcont_head_aux'>
+                                        <on>cimpcont_head_aux.head_seqno = es_sii_facturas.head_seqno</on>
+                                    </join>
+                                </from>
+                                <where>
+                                    @tmp_es_sii_fras.group_num = <g_group_num/>
+                                </where>
+                                <order>niftitular, libro, idemisor, numfactura, fechafactura</order>
+                            </select>
+                            <do>
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                 <if>
+                                     <expr>
+                                        <util.counter.count><m_counter /></util.counter.count>
+                                    </expr>
+                                    <then>
+                                        <println>PROGRESS:[<g_group_num/>] - <util.counter.log><m_counter /></util.counter.log></println>
+                                    </then>
+                                 </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Solo en BAJAS head_seqno puede ser NULL.                                -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <isnotnull><es_sii_facturas_head_seqno_tmp/></isnotnull>
+                                        <and/>
+                                        <isnull><es_sii_facturas_head_seqno/></isnull>
+                                    </expr>
+                                    <then>
+                                        <exception>Enlace [<es_sii_facturas_head_seqno_tmp/>] inexistente. <string.nl/>Se trata de una incidencia grave, por favor, contacte con soporte de sistemas de información.</exception>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Verifica el código de la empresa.                                       -->
+                                <!-- En algunas instalacions se han definido más de una sociedad con mismo   -->
+                                <!-- NIF (sic!)                                                              -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <ne><es_sii_facturas_empcode/><p_empcode/></ne>
+                                    </expr>
+                                    <then>
+                                        <exception>El código de sociedad del proceso [<p_empcode/>] difiere del código de sociedad de la factura [<es_sii_facturas_empcode/>]. Ver factura: [<es_sii_facturas_numfactura/>] de fecha [<es_sii_facturas_fechafactura/>]. <string.nl/>Se trata de una incidencia grave, por favor, contacte con soporte de sistemas de información.</exception>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Si se excede el número máximo de errores (m_max_errors)                 -->
+                                <!-- detiene el proceso con una excepción genérica.                          -->
+                                <!-- ======================================================================= -->
+                                <set name='m_max_errors'>10</set>
+
+                                <!-- ======================================================================= -->
+                                <!-- Permite control de excepciones hasta un número limitado de errores.     -->
+                                <!-- ======================================================================= -->
+                                <set name='m_if_error_exception'><false/></set>
+                                <!-- Si solo hay una factura y ésta produce error emitiremos la excepción. -->
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <eq><g_group_regs/>1</eq>
+                                            <eq><m_max_errors/>0</eq>   <!-- Tolerancia a errores cero generar RAISE -->
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <set name='m_if_error_exception'><true/></set>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Genera el mensaje de una factura.                                       -->
+                                <!-- ======================================================================= -->
+                                <try>
+                                    <body>
+                                        <set name='m_error_message'><null/></set>
+
+                                        <call name='es_sii_get_datosinmueble_18' into='datosinmueble'>
+                                            <es_sii_facturas_head_seqno />
+                                            <es_sii_facturas_empcode />
+                                            <null />
+                                            <es_sii_facturas_inm_refer_catastral />
+                                            <null />
+                                            <number>1</number>
+                                        </call>
+
+                                        <map name='vmap'>
+                                            <item>idemisor<string><es_sii_facturas_idemisor /></string></item>
+                                            <item>numfactura<string><es_sii_facturas_numfactura /></string></item>
+                                            <item>fechafactura<date.format format='dd-MM-yyyy'><es_sii_facturas_fechafactura/></date.format></item>
+                                        </map>
+
+                                        <set name='m_message_row'>
+                                            <freemarker.template.process>
+                                                <freemarker.template.get name='sii_lria_row' />
+                                            </freemarker.template.process>
+                                        </set>
+
+                                        <set name='m_message_body'><string><m_message_body /><string.nl /><m_message_row /></string></set>
+                                    </body>
+                                    <catch>
+                                        <!-- ATENCIÓN: No incluir saltos de linea en este mensaje de error. -->
+                                        <set name='m_error_message'><string>ERROR. Line: [<error.line/>]  Tag: [<error.tag/>]  <error.message/></string></set>
+                                        <if>
+                                            <expr>
+                                                <m_if_error_exception/>
+                                            </expr>
+                                            <then>
+                                                <exception><m_error_message/></exception>
+                                            </then>
+                                        </if>
+                                    </catch>
+                                </try>
+
+                                <!-- ======================================================================= -->
+                                <!-- Si se excede el número máximo de errores (m_max_errors)                 -->
+                                <!-- detiene el proceso con una excepción.                                   -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <isnull><m_error_message/></isnull>
+                                    </expr>
+                                    <then>
+                                        <!-- ======================================================================= -->
+                                        <!-- Contador de mensajes generados.                                         -->
+                                        <!-- ======================================================================= -->
+                                        <set name='m_es_sii_facturas_rows_proc'><add><m_es_sii_facturas_rows_proc/>1</add></set>
+                                    </then>
+                                    <else>
+                                        <!-- ======================================================================= -->
+                                        <!-- Marca la factura con error.                                             -->
+                                        <!-- ======================================================================= -->
+                                        <update table='@tmp_es_sii_fras'>
+                                            <column name='message_error'>1</column>
+                                            <where>
+                                                   group_num      = <g_group_num/>
+                                               AND niftitular     = <p_niftitular/>
+                                               AND libro          = <p_libro/>
+                                               AND idemisor       = <es_sii_facturas_idemisor/>
+                                               AND numfactura     = <es_sii_facturas_numfactura/>
+                                               AND fechafactura   = <es_sii_facturas_fechafactura/>
+                                            </where>
+                                        </update>
+                                        <!-- ======================================================================= -->
+                                        <!-- Contador de errores por exception en el proceso de generación del mensaje.-->
+                                        <!-- ======================================================================= -->
+                                        <set name='m_num_errors'><add><m_num_errors/>1</add></set>
+                                        <!-- ======================================================================= -->
+                                        <!-- Si alcanzamos el número máximo de errores permitido detenemos el proceso. -->
+                                        <!-- ======================================================================= -->
+                                        <if>
+                                            <expr>
+                                                <gt><m_num_errors/><m_max_errors/></gt>
+                                            </expr>
+                                            <then>
+                                                <exception>Se ha excedido el número máximo de errores: [<m_max_errors/>]. Total errores: [<m_num_errors/>]<string.nl/>Last error: [<m_error_message/>]</exception>
+                                            </then>
+                                        </if>
+                                    </else>
+                                </if>
+                            </do>
+                        </foreach>
+
+                        <!-- ======================================================================= -->
+                        <!-- Almacena el mensaje de solicitud generado.                              -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <gt><m_es_sii_facturas_rows_proc/>0</gt>
+                            </expr>
+                            <then>
+                                <!-- ======================================================================= -->
+                                <!-- sii:Cabecera                                                            -->
+                                <!-- ======================================================================= -->
+                                <map name='vmap'>
+                                    <item>admon<string><p_admon /></string></item>
+                                    <item>operation<string><m_operation /></string></item>
+                                    <item>idversionsii<string><p_idversionsii /></string></item>
+                                    <item>nombre_razon_titular<string><p_nombre_razon_titular /></string></item>
+                                    <item>niftitular<string><p_niftitular /></string></item>
+                                    <item>libro<string><p_libro /></string></item>
+                                    <item>tipocomunicacion<string><p_tipocomunicacion /></string></item>
+                                    <item>message_body<string><m_message_body /></string></item>
+                                </map>
+
+                                <set name='m_message_full'>
+                                    <freemarker.template.process>
+                                        <freemarker.template.get name='sii_lr_full' />
+                                    </freemarker.template.process>
+                                </set>
+
+                                <!-- Remove all SPACES in the beginning of each line.  -->
+                                <!--     (?m)^\s+                                      -->
+                                <!--     (?m)                Multiline mode can also be enabled via the embedded flag expression. -->
+                                <!--         ^\s+            Means all SPACES in the beginning line.                              -->
+                                <set name='m_regexp'><string>(?m)^\s+</string></set>
+                                <set name='m_message_full'>
+                                    <string.replaceAll>
+                                        <m_message_full />
+                                        <m_regexp/>
+                                        <string/>
+                                    </string.replaceAll>
+                                </set>
+
+                                <!-- Remove all trailing SPACES of each line.     -->
+                                <!--     (?m)\s+$                                 -->
+                                <!--     (?m)                Multiline mode can also be enabled via the embedded flag expression. -->
+                                <!--         \s+$            Means all SPACES in the trailing line.                               -->
+                                <set name='m_regexp'><string>(?m)\s+$</string></set>
+                                <set name='m_message_full'>
+                                    <string.replaceAll>
+                                        <m_message_full />
+                                        <m_regexp/>
+                                        <string/>
+                                    </string.replaceAll>
+                                </set>
+
+                                <!-- ======================================================================= -->
+                                <!-- Calculamos MD5 del contenido del mensaje.                               -->
+                                <!-- Verificación Linux: md5sum [FILE]                                       -->
+                                <!-- ======================================================================= -->
+                                <set name='m_md5_request'>
+                                    <crypt.digest.md5>
+                                        <string.getBytes ><m_message_full/></string.getBytes >
+                                    </crypt.digest.md5>
+                                </set>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <system.getDebug/>
+                                    </expr>
+                                    <then>
+                                        <println>LOG:[<system.function.getName/>] [<date.current/>] START WRITE MESSAGE:[es_sii_facturas]</println>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <connection.begin/>
+
+                                <!-- ======================================================================= -->
+                                <!-- Gestiona el periodo de transición ante un cambio de NIF de presentador. -->
+                                <!--                                                                         -->
+                                <!-- Si procesamos una sola factura y no comunicamos A0 Alta al SII          -->
+                                <!-- evaluamos la fecha de la primera presentación para ayudar a determinar  -->
+                                <!-- el NIF del presentador a dicha fecha, evitando el error:                -->
+                                <!--                                                                         -->
+                                <!--     3010  El Presentador no tiene los permisos necesarios para actualizar esta factura -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <set name='m_fecha_presentacion'><null/></set>
+                                <if>
+                                    <expr>
+                                        <and>
+                                            <eq><m_es_sii_facturas_rows_proc/>1</eq>    <!-- Solo una factura   -->
+                                            <ne><p_tipocomunicacion/>A0</ne>            <!-- No es A0 Alta      -->
+                                        </and>
+                                    </expr>
+                                    <then>
+                                        <!-- Obtiene la identificación de la factura -->
+                                        <select prefix='t_' required='NotFound: [${g_group_num}]'>
+                                            <columns>
+                                                *
+                                            </columns>
+                                            <from table='@tmp_es_sii_fras' />
+                                            <where>
+                                                    group_num      = <g_group_num/>
+                                                AND message_error  = 0
+                                            </where>
+                                        </select>
+
+                                        <!-- Obtiene la fecha de la última presentación al SII -->
+                                        <select prefix='m_'>
+                                            <columns>
+                                                MIN(<date>date_updated</date>) AS fecha_presentacion
+                                            </columns>
+                                            <from table='es_sii_facturas_his' />
+                                            <where>
+                                                    niftitular       = <t_niftitular/>
+                                                AND libro            = <t_libro/>
+                                                AND idemisor         = <t_idemisor/>
+                                                AND numfactura       = <t_numfactura/>
+                                                AND fechafactura     = <t_fechafactura/>
+                                                <!-- Última presentación Correcta o Aceptada con errores -->
+                                                AND check_sii_estado_refcat15 IS NOT NULL
+                                                AND id_ws_request_refcat15 = check_id_ws_request
+                                            </where>
+                                        </select>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!-- Devuelve el NIF del presentador y la Key del certificado.               -->
+                                <!-- ======================================================================= -->
+                                <call name='es_sii_get_nifpresentador' into='m_nifpresentador, m_key_name'>
+                                    <p_empcode/>
+                                    <p_niftitular/>
+                                    <m_fecha_presentacion/>     <!-- Fecha de presentación. NULL = TODAY -->
+                                </call>
+
+                                <!-- ======================================================================= -->
+                                <!-- Write message to cwsi_messages                                          -->
+                                <!-- ======================================================================= -->
+                                <insert table='cwsi_messages' prepare-cache='true'>
+                                    <column name='method_code'><m_method_code/></column>
+                                    <column name='key_name'><m_key_name/></column>
+                                    <column name='md5_request'><m_md5_request/></column>
+                                    <column name='message_request'><string.getBytes ><m_message_full/></string.getBytes ></column>
+                                    <column name='status_message'>UD</column>                       <!-- UD  Pendiente entregar el mensaje ( Undelivered ) -->
+                                    <column name='user_created'><system.user.getCode/></column>
+                                    <column name='date_created'><date.current/></column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                </insert>
+                                <set name='m_id_ws_request'><sqlca.serial /></set>
+
+                                <!-- request_size -->
+                                <set name='m_file_name'><add><string>id_ws_request_</string><string.lpad><m_id_ws_request/><number>8</number><string>0</string></string.lpad><string>.request</string></add></set>
+                                <file.bytes.write>
+                                    <file name='${m_file_name}'         type='temp' />
+                                    <m_message_full/>
+                                </file.bytes.write>
+                                <set name='m_request_size'>
+                                    <file.length><file name='${m_file_name}' type='temp' /></file.length>
+                                </set>
+                                <update table='cwsi_messages'>
+                                    <column name='request_size'><m_request_size/></column>
+                                    <where>
+                                            id_ws_request = <m_id_ws_request/>
+                                    </where>
+                                </update>
+
+                                <!-- ======================================================================= -->
+                                <!-- Write message to es_sii_requests                                        -->
+                                <!-- ======================================================================= -->
+                                <insert table='es_sii_requests' prepare-cache='true'>
+                                    <column name='id_ws_request'><m_id_ws_request/></column>
+                                    <column name='empcode'><p_empcode/></column>
+                                    <column name='ejercicio'><p_ejercicio/></column>
+                                    <column name='admon'><p_admon/></column>
+                                    <column name='method_code'><m_method_code/></column>
+                                    <column name='csv'>-</column>                                       <!-- Transitorio hasta la recepción de la respuesta -->
+                                    <column name='niftitular'><p_niftitular/></column>
+                                    <column name='nifpresentador'><m_nifpresentador/></column>
+                                    <column name='ts_presentacion'><date.current/></column>             <!-- Transitorio hasta la recepción de la respuesta -->
+                                    <column name='idversionsii'><p_idversionsii/></column>
+                                    <column name='tipocomunicacion'><p_tipocomunicacion/></column>
+                                    <column name='estadoenvio'><string>0</string></column>              <!-- Transitorio hasta la recepción de la respuesta -->
+                                                                                                        <!--     '0' = No entregado a SII                   -->
+                                    <column name='user_created'><system.user.getCode/></column>
+                                    <column name='date_created'><date.current/></column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                </insert>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <update table='es_sii_facturas'>
+                                    <column name='sii_estado_refcat15'>0</column>
+                                    <column name='id_ws_request_refcat15'><m_id_ws_request/></column>
+                                    <column name='user_updated'><system.user.getCode/></column>
+                                    <column name='date_updated'><date.current/></column>
+                                    <where>
+                                           <!-- La col empcode no se requiere en la PK. Existen instalaciones con varios empcode y mismo NIF (sic) -->
+                                           es_sii_facturas.empcode         = <p_empcode/>
+                                       AND EXISTS (SELECT s.numfactura FROM @tmp_es_sii_fras s
+                                                    WHERE s.group_num      = <g_group_num/>
+                                                      AND s.niftitular = es_sii_facturas.niftitular
+                                                      AND s.libro          = es_sii_facturas.libro
+                                                      AND s.idemisor       = es_sii_facturas.idemisor
+                                                      AND s.numfactura     = es_sii_facturas.numfactura
+                                                      AND s.fechafactura   = es_sii_facturas.fechafactura
+                                                      AND s.message_error  = 0)
+                                    </where>
+                                </update>
+
+                                <!-- ======================================================================= -->
+                                <!-- Verifica el número de registros modificados.                            -->
+                                <!-- ======================================================================= -->
+                                <set name='m_es_sii_facturas_rows_upd'><sqlca.count/></set>
+                                <if>
+                                    <expr>
+                                        <ne><m_es_sii_facturas_rows_upd/><m_es_sii_facturas_rows_proc/></ne>
+                                    </expr>
+                                    <then>
+                                        <exception>Se han modificado [<m_es_sii_facturas_rows_upd/>] registros en [es_sii_facturas] y se esperaban modificar [<m_es_sii_facturas_rows_proc/>].</exception>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <connection.commit/>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <system.getDebug/>
+                                    </expr>
+                                    <then>
+                                        <println>LOG:[<system.function.getName/>] [<date.current/>] END WRITE MESSAGE:[es_sii_facturas]</println>
+                                    </then>
+                                </if>
+
+                                <!-- ======================================================================= -->
+                                <!--                                                                         -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <p_entregar_a_sii/>
+                                    </expr>
+                                    <then>
+                                        <!-- ======================================================================= -->
+                                        <!-- XSQL cwsi_messages_send_18                                              -->
+                                        <!--                                                                         -->
+                                        <!-- Proceso para la entrega de los mensajes Web Service.                    -->
+                                        <!--                                                                         -->
+                                        <!-- ======================================================================= -->
+                                        <set name='m_str_query_cwsi_messages'><string>cwsi_messages.id_ws_request = <variable.toQuery><m_id_ws_request/></variable.toQuery></string></set>
+                                        <call name='cwsi_messages_send_18'>
+                                            <m_str_query_cwsi_messages/>
+                                        </call>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+                    </do>
+                </foreach>
+            </body>
+        </function>
+
+        <!-- ======================================================================= -->
+        <!-- INICIO PROCESO                                                          -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Get Versión                                                             -->
+        <!-- ======================================================================= -->
+        <call name='es_sii_get_idversionsii_18' into='m_idversionsii' />
+
+        <!-- ======================================================================= -->
+        <!-- Encadenamiento de procesos:                                             -->
+        <!--    3: Añadir facturas, generar y entregar mensajes                      -->
+        <!-- ======================================================================= -->
+        <set name='m_entregar_a_sii'><false/></set>
+        <if>
+            <expr>
+                <eq><p_modo/>3</eq>
+            </expr>
+            <then>
+                <set name='m_entregar_a_sii'><true/></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Agrupador de mensajes de las facturas.                                  -->
+        <!-- ======================================================================= -->
+        <foreach>
+            <select prefix='m_' secure='true' prepare='false'>
+                <columns>
+                    ejercicio, niftitular, libro, tipocomunicacion, empcode
+                </columns>
+                <from table='es_sii_facturas' />
+                <where>
+                        erp_estado = 'E'                <!-- Facturas entregadas.                           -->
+                    AND sii_estado = 1                  <!-- Respuesta Correcta                             -->
+                    AND refcat15   = 1                  <!-- Facturas con más de 15 referencias catastrales -->
+                    AND id_ws_request_refcat15 IS NULL  <!-- No enviado.                                    -->
+                    AND <p_str_query mode='unquoted'/>
+                    <string mode='unquoted'>
+                        <ifthen>
+                            <expr><isnotnull><p_rowid /></isnotnull></expr>
+                            <sql.xsql2text>
+                                <xsql-text>AND <rowid table='es_sii_facturas' /> = <p_rowid /></xsql-text>
+                            </sql.xsql2text>
+                            <string />
+                        </ifthen>                    
+                    </string>
+                </where>
+                <group>ejercicio, niftitular, libro, tipocomunicacion, empcode</group>
+                <order>ejercicio, niftitular, libro, tipocomunicacion, empcode</order>
+            </select>
+            <do>
+
+                <!-- ======================================================================= -->
+                <!-- Nombre empresa                                                          -->
+                <!-- ======================================================================= -->
+                <select prefix='m_' required='Empresa ${m_empcode}' >
+                    <columns>
+                        empname AS nombre_razon_titular
+                    </columns>
+                    <from table='cempresa' />
+                    <where>
+                            empcode = <m_empcode/>
+                    </where>
+                </select>
+                <set name='m_nombre_razon_titular'><local_str_fixlen><m_nombre_razon_titular/><number>120</number></local_str_fixlen></set>
+
+                <!-- ======================================================================= -->
+                <!-- Determina la Administración competente inspectora                       -->
+                <!--                                                                         -->
+                <!--      00  Territorio común                                               -->
+                <!--      01  Diputación foral de Álava                                      -->
+                <!--      02  Diputación foral de Guipúzcoa                                  -->
+                <!--      03  Diputación foral de Vizcaya                                    -->
+                <!--      04  Diputación foral de Navarra                                    -->
+                <!-- ======================================================================= -->
+                <select prefix='m_' required='Administración competente inspectora no encontrada para [${m_empcode} / ${m_ejercicio}]' >
+                    <columns>
+                        admon
+                    </columns>
+                    <from table='es_sii_admon_inspectora' />
+                    <where>
+                            empcode   = <m_empcode/>
+                        AND ejercicio = <m_ejercicio/>
+                    </where>
+                </select>
+
+                <!-- ======================================================================= -->
+                <!-- Proceso principal para la generación de los mensajes de las facturas:   -->
+                <!--     1) Altas y modificaciones                                           -->
+                <!--     2) Bajas                                                            -->
+                <!-- ======================================================================= -->
+                <local_mr_lrfe_refcat15_one_message>
+                    <m_entregar_a_sii/>
+                    <p_str_query/>
+                    <p_rowid />
+                    <m_ejercicio/>
+                    <m_admon/>
+                    <m_empcode/>
+                    <m_niftitular/>
+                    <m_nombre_razon_titular/>
+                    <m_idversionsii/>
+                    <m_libro/>
+                    <m_tipocomunicacion/>
+                </local_mr_lrfe_refcat15_one_message>
+            </do>
+        </foreach>
+    </body>
+</xsql-script>

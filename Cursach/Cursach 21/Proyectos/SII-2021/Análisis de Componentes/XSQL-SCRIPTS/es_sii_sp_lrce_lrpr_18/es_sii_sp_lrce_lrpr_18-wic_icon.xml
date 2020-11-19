@@ -1,0 +1,818 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_sp_lrce_lrpr_18                                             -->
+<!--                                                                         -->
+<!-- Prepara los cobros y/o pagos de las facturas emitidas y facturas        -->
+<!-- recibidas de las operaciones RECC Régimen Especial Criterio de Caja     -->
+<!-- del sistema SII insertando en la tabla es_sii_pagos                     -->
+<!--                                                                         -->
+<!-- es_sii_sp_lrce_lrpr                                                     -->
+<!--     es_sii = Módulo SII                                                 -->
+<!--     sp     = Supervisor                                                 -->
+<!--     lrce   = Libro Registro Cobros facturas Emitidas                    -->
+<!--     lrpr   = Libro Registro Pagos facturas Recibidas                    -->
+<!--                                                                         -->
+<!-- Consideraciones:                                                        -->
+<!--     1) Solo se presentarán cobros y/o pagos de facturas que previamente -->
+<!--        han sido comunicadas al SII con código de operación 07 Regimen   -->
+<!--        criterio de caja.                                                -->
+<!--                                                                         -->
+<!--     2) Los cobros y pagos deben haber sido tratados por el proceso      -->
+<!--        de validación de impuestos (cimpcont_validacion) ya sea por      -->
+<!--        estar liquidados (cobrados y/o pagados) o porque ha transcurrido -->
+<!--        el plazo límite de presentación. (Ver preguntas 8.2 y 8.3)       -->
+<!--                                                                         -->
+<!-- 8.2. En el caso de que efectuada una venta no se obtenga el cobro en    -->
+<!--      los plazos establecidos y el devengo se produzca el 31 de          -->
+<!--      diciembre del año posterior al que se realiza la operación. ¿Cuál  -->
+<!--      es la fecha que debe registrarse como cobro de la operación?       -->
+<!--      Respuesta:                                                         -->
+<!--      El 31 de diciembre del año posterior al que se realiza la operación-->
+<!--      por ser la fecha de devengo. Los posteriores cobros no generarán   -->
+<!--      anotación alguna.                                                  -->
+<!--      En el campo “Medio de Pago/Cobro” se consignará el valor 03.       -->
+<!--                                                                         -->
+<!-- 8.3. En el caso de que efectuada una compra no se satisfaga el pago en  -->
+<!--      los plazos establecidos y el nacimiento del derecho a deducir se   -->
+<!--      produzca el 31 de diciembre del año posterior al que se realiza la -->
+<!--      operación. ¿Cuál es la fecha que debe registrarse como pago de la  -->
+<!--      operación?                                                         -->
+<!--      Respuesta:                                                         -->
+<!--      El 31 de diciembre del año posterior al que se realiza la operación-->
+<!--      por ser la fecha de devengo. Los posteriores pagos no generarán    -->
+<!--      anotación alguna.                                                  -->
+<!--      En el campo “Medio de Pago/Cobro” se consignará el valor 03.       -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_sp_lrce_lrpr_18'>
+
+    <args>
+        <arg name='p_modo'                  type='smallint' info='Tareas a ejecutar. 1: Añadir facturas  ;  2: Añadir facturas y generar mensajes  ;  3: Añadir facturas, generar y entregar mensajes' />
+        <arg name='p_str_empcode'           type='string'   info='Company code' />
+        <arg name='p_str_query'             type='string'   info='Query' />
+        <arg name='p_generic_fecdec_ini'    type='date'     info='Start date o null' />
+        <arg name='p_generic_fecdec_fin'    type='date'     info='End date o null' />
+    </args>
+
+    <body>
+
+<!--
+<set name='p_modo'>1</set>
+<set name='p_str_empcode'> LIKE '%'</set>
+<set name='p_str_query'><string>es_sii_facturas.libro = 'FR'</string></set>
+<set name='p_str_query'><string>cimpcont.orden = 10537880</string></set>
+<set name='p_generic_fecdec_ini' type='date'><null/></set>
+<set name='p_generic_fecdec_fin' type='date'><null/></set>
+-->
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <or>
+                    <isnull><p_str_query/></isnull>
+                    <eq><string.length><p_str_query/></string.length>0</eq>
+                </or>
+            </expr>
+            <then>
+                <set name='p_str_query'><string>1 = 1</string></set>
+            </then>
+        </if>
+
+<!--
+update cimpcont_head set head_status = 0 where head_status = 1;
+delete from es_sii_facturas     where 1=1;
+delete from es_sii_facturas_his where 1=1;
+delete from es_sii_requests     where 1=1;
+delete from cwsi_messages       where 1=1;
+
+68 segons   32541
+-->
+
+<!-- PROCESO:
+MAIN
+    FOREACH empresa
+        es_sii_get_fechas
+
+        local_reprocess_invoices  Opcionalmente permite el reproceso de facturas entregadas con errores.
+
+        local_remove_verify       Comprueba que no existan facturas ANULADAS del sistema SII en el
+                                  controlador cimpcont_head.
+
+        local_remove_delete       Localiza y prepara las facturas que deben ser eliminadas,
+                                  comunicando BAJA o CANCELANDO el registro.
+
+        local_modify_link         Reenlaza las facturas que han sido moodificadas al sistema SII.
+
+        local_add_invoices        Añade las nuevas facturas pendientes de declarar al sistema SII.
+-->
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_get_tableorview                                              -->
+        <!--                                                                         -->
+        <!-- Si existe VIEW para TABNAME + "_v" devuelve el nombre de la vista, en   -->
+        <!-- caso contrario devuelve el nombre de la tabla.                          -->
+        <!--                                                                         -->
+        <!-- En instalaciones antiguas si la estructura de la tabla cimpcont está    -->
+        <!-- desfasada puede crearse una vista para adaptar al nuevo modelo en la    -->
+        <!-- medida de lo posible. En especial afecta a las columnas codnac, codpos, -->
+        <!-- fecrec y docrec                                                         -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_get_tableorview'>
+            <args>
+                <arg name='p_tabname'       type='string' />
+            </args>
+            <body>
+
+                <set name='m_viewname'><add><p_tabname/><string>_v</string></add></set>
+                <try>
+                    <body>
+                        <!-- Devuelve VIEW or exception: Table 'cimpcont_v' not found -->
+                        <!-- Devolvía VIEW or null                                    -->
+                        <set name='m_tabletype'>
+                            <table.getTableType table='${m_viewname}' />
+                        </set>
+                    </body>
+                    <catch>
+                        <!-- XSQLScriptException: Table 'cimpcont_v' not found -->
+                        <set name='m_tabletype'><null/></set>
+                    </catch>
+                </try>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_tabletype/>VIEW</eq>
+                    </expr>
+                    <then>
+                        <return><m_viewname/></return>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return>
+                    <p_tabname/>
+                </return>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_es_sii_pagos_add                                             -->
+        <!--                                                                         -->
+        <!-- Selecciona los cobros y/o pagos pendientes de comunicar al SII de las   -->
+        <!-- facturas declaradas emitidas o recibidas con clave de operación:        -->
+        <!--    07  Régimen especial criterio de caja                                -->
+        <!--                                                                         -->
+        <!-- Inserta en la tabla es_sii_pagos los identificadores de los efectos de  -->
+        <!-- cartera que deberán informarse al SII.                                  -->
+        <!-- ======================================================================= -->
+        <function name='local_es_sii_pagos_add'>
+            <args>
+                <arg name='p_idversionsii'              type='string' />
+                <arg name='p_str_query'                 type='string' />
+                <arg name='p_empcode'                   type='string' />
+                <arg name='p_niftitular'                type='string' />
+                <arg name='p_fecdec_ini'                type='date' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <set name='m_user_created'><system.user.getCode /></set>
+                <set name='m_date_created'><date.current /></set>
+
+                <!-- ======================================================================= -->
+                <!-- Determina si cimpcont TABLE o cimpcont_v VIEW                           -->
+                <!-- ======================================================================= -->
+                <set name='m_cimpcont_access'><local_get_tableorview>cimpcont</local_get_tableorview></set>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <gt><date.year><p_fecdec_ini/></date.year><number>2017</number></gt>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Retrocede en 30 dias el periodo inicial.                                -->
+                        <!-- ======================================================================= -->
+                        <set name='m_fecha_inicio'>
+                            <sub>
+                                <p_fecdec_ini/><date.units type='d'>30</date.units>
+                            </sub>
+                        </set>
+                    </then>
+                    <else>
+                        <!-- ======================================================================= -->
+                        <!-- Durante el primer año 2017 el barrido se realiza siempre desde el       -->
+                        <!-- 01-07-2017                                                              -->
+                        <!-- ======================================================================= -->
+                        <set name='m_fecha_inicio'><date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy></set>
+                    </else>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <or>
+                            <isnull><p_str_query/></isnull>
+                            <eq><string.length><p_str_query/></string.length>0</eq>
+                        </or>
+                    </expr>
+                    <then>
+                        <set name='p_str_query'><string>1 = 1</string></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Selecciona los cobros y/o pagos pendientes de comunicar al SII de las   -->
+                <!-- facturas declaradas emitidas o recibidas con clave de operación:        -->
+                <!--    07  Régimen especial criterio de caja                                -->
+                <!-- o presentadas dentro del primer semestre 2017 con claves 14 o 16        -->
+                <!-- Evita error:                                                            -->
+                <!--     3007  No se pueden incluir pagos si el campo ClaveRegimenEspecialOTrascendencia de la factura tiene un valor distinto de 07 -->
+                <!--                                                                         -->
+                <!-- ATENCIÓN PROBLEMA DE RENDIMIENTO EN IBM-Informix:                       -->
+                <!-- Si se accede a cimpcont con la vista de customización cimpcont_v        -->
+                <!-- la condición "AND cimpcont.cashvat       = 1" ocasiona que el método    -->
+                <!-- de acceso a las tres tablas sea mediante SEQUENTIAL SCAN                -->
+                <!-- Verificar el valor del parámetro de configuración IFX_FOLDVIEW ,        -->
+                <!-- las nuevas versiones sugieren fijar el valor 1                          -->
+                <!--     Reconfigurar con el comando onmode -wm y luego editar el fichero:   -->
+                <!--         $ onmode -wm IFX_FOLDVIEW=1                                     -->
+                <!--     y luego editar el fichero:                                          -->
+                <!--         $ vi ./etc/onconfig                                             -->
+                <!--     INFO:                                                               -->
+                <!--     IFX_FOLDVIEW   - Enables (1) or disables (0) folding views that     -->
+                <!--                      have multiple tables or a UNION ALL clause.        -->
+                <!--                      Disabled by default.                               -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <set name='m_check_numefe'><null/></set>
+                <foreach>
+                    <select prefix='cimpcont_'>
+                        <columns>
+                            cimpcont.*,
+                            es_sii_facturas.head_seqno,
+                            es_sii_facturas.libro
+                        </columns>
+                        <from table='${m_cimpcont_access}' alias='cimpcont'>
+                            <join type='inner' table='cimpcont_head'>
+                                <on>cimpcont.empcode     = cimpcont_head.empcode</on>
+                                <on>cimpcont.natfac      = cimpcont_head.natfac</on>
+                                <on>cimpcont.fecdoc      = cimpcont_head.fecdoc</on>
+                                <on>cimpcont.cif         = cimpcont_head.cif</on>
+                                <on>cimpcont.docser      = cimpcont_head.docser</on>
+                                <on>cimpcont_head.head_status = 1</on>
+                                <join type='inner' table='es_sii_facturas'>
+                                    <on>cimpcont_head.head_seqno = es_sii_facturas.head_seqno</on>
+                                    <on>(es_sii_facturas.claveoperacion IN ('14', '16') OR  <!-- 14 y 16 = Primer semestre 2017 -->
+                                         es_sii_facturas.claveoperacion = '07' OR           <!-- 07      = RECC                 -->
+                                         <nvl>es_sii_facturas.claveoperaciona1, <whitespace/></nvl> = '07' OR
+                                         <nvl>es_sii_facturas.claveoperaciona2, <whitespace/></nvl> = '07')</on>
+                                    <on>es_sii_facturas.tipocomunicacion != 'B'</on>            <!-- Factura no està dada de Baja   -->
+                                    <on>es_sii_facturas.erp_estado        = 'E'</on>            <!-- Factura Entregada              -->
+                                    <on>es_sii_facturas.sii_estado        = '1'</on>            <!-- Respuesta Correcta             -->
+                                </join>
+                            </join>
+                        </from>
+                        <where>
+                                cimpcont.empcode       = <p_empcode/>
+                            AND cimpcont.fecha         >= <m_fecha_inicio/>
+                            AND cimpcont.valida        = 'R'
+                            AND cimpcont.cashvat       = 1
+                            AND cimpcont.numefe        > 0
+                            AND NOT EXISTS (SELECT s.numefe FROM es_sii_pagos s WHERE s.numefe = cimpcont.numefe)
+                            AND <p_str_query mode='unquoted'/>
+                        </where>
+                        <order>cimpcont.fecha, cimpcont.numefe</order>
+                    </select>
+                    <do>
+                        <set name='es_sii_facturas_head_seqno'><cimpcont_head_seqno/></set>
+                        <set name='es_sii_facturas_libro'><cimpcont_libro/></set>
+                        <unset name='cimpcont_head_seqno'/>
+                        <unset name='cimpcont_libro'/>
+
+                        <!-- ======================================================================= -->
+                        <!-- A partir de la segunda base impositiva abandona y pasa a la siguiente   -->
+                        <!-- factura.                                                                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <and>
+                                    <isnotnull><m_check_numefe/></isnotnull>
+                                    <eq><m_check_numefe/><cimpcont_numefe/></eq>
+                                </and>
+                            </expr>
+                            <then>
+                                <foreach.continue/>
+                            </then>
+                            <else>
+                                <set name='m_check_numefe'><cimpcont_numefe/></set>
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene el importe total (bases + cuotas) del pago realizado.           -->
+                        <!-- ======================================================================= -->
+                        <select prefix='m_'>
+                            <columns>
+                                <!-- Excluye las bases correspondientes a gastos suplidos puesto que estos  -->
+                                <!-- importes no forman parte del total factura comunicado al SII.          -->
+                                SUM(CASE WHEN es_sii_get_is_supplied( cimpcont.opeimp ) = 0
+                                              THEN (cimpcont.basimp + cimpcont.totimp)
+                                              ELSE 0
+                                     END) AS total_import,
+                                <!-- Obtiene el importe total pagado , incluidos los suplidos, como base de -->
+                                <!-- comparación con el importe de la cartera.                              -->
+                                <!-- Los recargos de equivalencia y las retenciones solo acumulan totimp    -->
+                                SUM(CASE WHEN cimpcont.tipimp = 'N' THEN (cimpcont.basimp + cimpcont.totimp) ELSE cimpcont.totimp END) AS total_check_import,
+                                <!-- Obtiene el importe total de las posibles cuotas de Retenciones         -->
+                                <!-- Generalmente las retenciones no entran en el proceso de cálculo de las -->
+                                <!-- validaciones de impuestos, en tal caso el resultado del acumulado      -->
+                                <!-- en  total_check_impret  será igual a CERO. Debemos considerarlo en la  -->
+                                <!-- comprobación del importe pagado en la cartera.                         -->
+                                SUM(CASE WHEN cimpcont.tipimp = 'R' THEN cimpcont.totimp                     ELSE 0.00            END) AS total_check_impret
+                            </columns>
+                            <from table='${m_cimpcont_access}' alias='cimpcont' />
+                            <where>
+                                    cimpcont.empcode       = <p_empcode/>
+                                AND cimpcont.fecha         = <cimpcont_fecha/>
+                                AND cimpcont.valida        = 'R'
+                                AND cimpcont.cashvat       = 1
+                                AND cimpcont.numefe        = <cimpcont_numefe/>
+                                AND cimpcont.natfac        = <cimpcont_natfac/>
+                                AND cimpcont.fecdoc        = <cimpcont_fecdoc/>
+                                AND cimpcont.cif           = <cimpcont_cif/>
+                                AND cimpcont.docser        = <cimpcont_docser/>
+                            </where>
+                        </select>
+
+                        <!-- ======================================================================= -->
+                        <!-- Libro registro (Convenio Axional):                                      -->
+                        <!--     FE  Libro de registro de facturas emitidas                          -->
+                        <!--     FR  Libro de registro de facturas recibidas                         -->
+                        <!--     BI  Libro de registro de bienes de inversión                        -->
+                        <!--     OI  Libro de registro de determinadas operaciones intracomunitarias -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <eq><cimpcont_natfac/>V</eq>
+                            </expr>
+                            <then>
+                                <set name='m_libro'>FE</set>   <!-- FE  Libro de registro de facturas emitidas -->
+                            </then>
+                            <else>
+                                <set name='m_libro'>FR</set>   <!-- FR  Libro de registro de facturas recibidas -->
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <ne><es_sii_facturas_libro/><m_libro/></ne>
+                            </expr>
+                            <then>
+                                <exception>Factura [<es_sii_facturas_head_seqno/>] con discrepancia en tipo de libro. No es posible informar el pago. <string.nl/>[<m_msg_id_factura/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Obtiene la informació de la cartera.                                    -->
+                        <!-- ======================================================================= -->
+                        <select prefix='cefectos_'>
+                            <columns>
+                                cefectos.*,
+                                ctipoefe.nomefe,
+                                ctipoefe.domban,
+                                cterbanc.iban AS iban_ter,
+                                cbancpro.iban AS iban_emp,
+                                <!-- Invierte el signo del importe de la cartera si las clases de   -->
+                                <!-- factura y de cartera son discrepantes.                         -->
+                                <!-- No se excluye el importe acumulado de diferencias de cambio    -->
+                                <!-- (cefectos.difcam) porque estamos procesando cartera de         -->
+                                <!-- terceros españoles que son los únicos que pueden acogerse al   -->
+                                <!-- RECC Régimen Especial Criterio de Caja.                        -->
+                                CASE WHEN (<cimpcont_natfac/> = 'V' AND cefectos.clase = 'C'
+                                            OR
+                                           <cimpcont_natfac/> = 'C' AND cefectos.clase = 'P')
+                                           THEN +cefectos.import ELSE -cefectos.import
+                                 END AS imppag,
+                                <!-- Importe de la retención en el efecto.                          -->
+                                CASE WHEN (<cimpcont_natfac/> = 'V' AND cefectos.clase = 'C'
+                                            OR
+                                           <cimpcont_natfac/> = 'C' AND cefectos.clase = 'P')
+                                           THEN +cefectos.impret ELSE -cefectos.impret
+                                 END AS impret
+                            </columns>
+                            <from table='cefectos'>
+                                <join type='left' table='ctipoefe'>
+                                    <on>cefectos.clase   = ctipoefe.clase</on>
+                                    <on>cefectos.tipefe  = ctipoefe.codigo</on>
+                                </join>
+                                <join type='left' table='cterbanc'>
+                                    <on>cefectos.codper = cterbanc.codigo</on>
+                                    <on>cefectos.numban = cterbanc.numban</on>
+                                </join>
+                                <join type='left' table='cbancpro'>
+                                    <on>cefectos.empcode = cbancpro.empcode</on>
+                                    <on>cefectos.ctafin  = cbancpro.ctafin</on>
+                                </join>
+                            </from>
+                            <where>
+                                    cefectos.numero = <cimpcont_numefe/>
+                            </where>
+                        </select>
+
+                        <!-- ======================================================================= -->
+                        <!-- Si el pago es anterior a 01-07-2017 descarta el pago.                   -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <and>
+                                    <ne><cefectos_caduca/>N</ne>
+                                    <lt><cefectos_feccon/><date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy></lt>
+                                </and>
+                            </expr>
+                            <then>
+                                <foreach.continue/>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_msg_id_factura'><string>Factura [<es_sii_facturas_libro/>]. <string.nl/>Empresa: [<p_empcode/>] <string.nl/>Titular: [<p_niftitular/>] <string.nl/>Id Contraparte: [<cimpcont_cif/>] <string.nl/>Número de factura: [<cimpcont_docser/>] <string.nl/>Fecha de factura: [<cimpcont_fecdoc/>] <string.nl/>ID Efecto: [<cimpcont_numefe/>]</string></set>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <isnull><cefectos_numero/></isnull>
+                            </expr>
+                            <then>
+                                <exception>Efecto de cartera [<cimpcont_numefe/>] no encontrado. <string.nl/>[<m_msg_id_factura/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Si la factura incorpora retenciones de impuestos y éstos no se han      -->
+                        <!-- validado añadimos el importe de las retenciones para poder comparar con -->
+                        <!-- el importe del efecto.                                                  -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <eq><m_total_check_impret/>0</eq>
+                            </expr>
+                            <then>
+                                <set name='m_total_check_import'><add><m_total_check_import/><cefectos_impret/></add></set>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Comprueba importes.                                                     -->
+                        <!-- ATENCIÓN: Si una factura contiene IVA y retenciones éstas últimas       -->
+                        <!-- también deberían registrarse en origen con el indicador                 -->
+                        <!-- cimpcont.valida = 'N' de manera tal que al realizar el pago la parte    -->
+                        <!-- proporcional de las bases de retención también generarán los            -->
+                        <!-- correspondientes registros en cimpcont con valida = 'R'.                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <ne><cefectos_imppag/><m_total_check_import/></ne>
+                            </expr>
+                            <then>
+                                <exception>Existe discrepancia en el importe total [<cefectos_imppag/>] != [<m_total_check_import/>] pagado (bases + cuotas) del efecto [<cimpcont_numefe/>]. <string.nl/>[<m_msg_id_factura/>]</exception>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- L11  Medio de Pago/Cobro -->
+                        <!--     01 Transferencia                                                                             -->
+                        <!--     02 Cheque                                                                                    -->
+                        <!--     03 No se cobra / paga (fecha límite de devengo / devengo forzoso en concurso de acreedores)  -->
+                        <!--     04 Otros medios de cobro / pago                                                              -->
+                        <!--     05 Recibo domiciliado 2018 v1.1                                                              -->
+                        <!--                                                                         -->
+                        <!-- Si el efectto no está pagado y tiene una antiguedad de más de 365 días  -->
+                        <!-- proponemos:                                                             -->
+                        <!--     03 No se cobra / paga (fecha límite de devengo / devengo forzoso en concurso de acreedores)  -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <and>
+                                    <eq><cefectos_caduca/>N</eq>
+                                    <gt><sub><date.today/><cefectos_fecha/></sub>365</gt>
+                                </and>
+                            </expr>
+                            <then>
+                                <set name='m_fechapago'><cimpcont_fecha/></set>     <!-- Fecha contabilización validación del impuesto -->
+                                <set name='m_medio' type='string'><string>03</string></set>
+                                <set name='m_cuenta'><null/></set>
+                            </then>
+                            <else>
+                                <set name='m_fechapago'><cefectos_feccon/></set>
+                                <set name='m_medio' type='string'><string>04</string></set>
+                                <set name='m_cuenta'><cefectos_nomefe/></set>
+                                <if>
+                                    <expr>
+                                        <string.matches><cefectos_tipefe/>TR*</string.matches>
+                                    </expr>
+                                    <then>
+                                        <set name='m_medio' type='string'><string>01</string></set>
+                                        <set name='m_cuenta'><ifnull><cefectos_iban_ter/><cefectos_nomefe/></ifnull></set>
+                                        <if>
+                                            <expr>
+                                                <eq><cefectos_clase/>C</eq>
+                                            </expr>
+                                            <then>
+                                                <set name='m_cuenta'><cefectos_iban_emp/></set>
+                                            </then>
+                                        </if>
+                                    </then>
+                                </if>
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <string.matches><cefectos_tipefe/>CH*</string.matches>
+                                            <string.matches><cefectos_tipefe/>XE*</string.matches>
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <set name='m_medio' type='string'><string>02</string></set>
+                                        <set name='m_cuenta'><null/></set>
+                                    </then>
+                                </if>
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <string.matches><cefectos_tipefe/>RD*</string.matches>
+                                            <string.matches><cefectos_tipefe/>RB*</string.matches>
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <set name='m_medio' type='string'><string>05</string></set>
+                                        
+                                        <set name='m_cuenta'><null/></set>
+                                        <if>
+                                            <expr>
+                                                <eq><cefectos_clase/>C</eq>
+                                            </expr>
+                                            <then>
+                                                <set name='m_cuenta'><cefectos_iban_emp/></set>
+                                            </then>
+                                        </if>
+                                    </then>
+                                </if>                                
+                            </else>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_chk_periodo'><true/></set>
+                        <include code='es_sii_sp_lrce_lrpr' name='before_add_pagos' />
+
+                        <!-- ======================================================================= -->
+                        <!-- Si el periodo (año / mes) del pago y el periodo de la validación del    -->
+                        <!-- impuesto no son coincidentes cancela el proceso.                        -->
+                        <!--                                                                         -->
+                        <!-- La fecha de validación del impuesto participa en los informes de        -->
+                        <!-- liquidación del IVA ( cimpcont.valida = 'R' ), con este control se      -->
+                        <!-- pretende hacer coincidir el periodo de validación con el periodo de la  -->
+                        <!-- fecha de pago comunicada al sistema SII.                                -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <m_chk_periodo/>
+                            </expr>
+                            <then>
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <ne><date.year><m_fechapago/></date.year><date.year><cimpcont_fecha/></date.year></ne>
+                                            <ne><date.month><m_fechapago/></date.month><date.month><cimpcont_fecha/></date.month></ne>
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <exception>Existe discrepancia entre el periodo del pago y el periodo de validación del impuesto [<m_fechapago/>] != [<cimpcont_fecha/>] del efecto [<cimpcont_numefe/>]. <string.nl/>[<m_msg_id_factura/>]</exception>
+                                    </then>
+                                </if>
+                            </then>
+                        </if>
+
+                        <!-- ======================================================================= -->
+                        <!-- Estado control ERP Axional                                              -->
+                        <!--         P = Pendiente / Pendiente generar el mensaje para el sistema SII-->
+                        <!--         G = Generado  / Generado el mensaje para el sistema SII         -->
+                        <!--         E = Entregado / Comunicación y entrega del mensaje al sistema SII -->
+                        <!-- ======================================================================= -->
+                        <set name='m_erp_estado'><string>P</string></set>
+
+                        <!-- ======================================================================= -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <insert table='es_sii_pagos' prepare-cache='true'>
+                            <column name='head_seqno'><es_sii_facturas_head_seqno/></column>
+                            <column name='numefe'><cimpcont_numefe/></column>
+                            <column name='fechapago'><m_fechapago/></column>
+                            <column name='importepago'><m_total_import/></column>   <!-- El importe comunicado no informa la parte de los posibles suplidos ! -->
+                            <column name='medio'><m_medio/></column>
+                            <column name='cuenta'><m_cuenta/></column>
+                            <column name='erp_estado'><m_erp_estado/></column>
+                            <column name='sii_estado'><null/></column>
+                            <column name='id_ws_request'><null/></column>
+                            <column name='user_created'><m_user_created/></column>
+                            <column name='date_created'><m_date_created/></column>
+                            <column name='user_updated'><m_user_created/></column>
+                            <column name='date_updated'><m_date_created/></column>
+                        </insert>
+                    </do>
+                </foreach>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- INICIO PROCESO                                                          -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Get Versión                                                             -->
+        <!-- ======================================================================= -->
+        <call name='es_sii_get_idversionsii_18' into='m_idversionsii' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include code='es_sii_sp_lrce_lrpr' name='before' />
+
+        <!-- ======================================================================== -->
+        <!-- Analiza si existe la columna cempresa.grpent                             -->
+        <!-- ======================================================================== -->
+        <set name='m_col_cempresa_grpent'>cempresa.grpent</set>
+        <set name='m_exists_col_grpent'><table.findColumnIndex table='cempresa' column='grpent' /></set>
+        <if>
+            <expr>
+                <eq><m_exists_col_grpent/>-1</eq>
+            </expr>
+            <then>
+                <set name='m_col_cempresa_grpent'><string>' '</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Cursor empresas.                                                        -->
+        <!-- ======================================================================= -->
+        <foreach>
+            <select prefix='cempresa_' secure='true' >
+                <columns>
+                    cempresa.empcode,
+                    ${m_col_cempresa_grpent} AS grpent,
+                    CASE WHEN ctercero.cif LIKE 'ES%' THEN SUBSTR(ctercero.cif, 3, 20) ELSE ctercero.cif END AS cif
+                </columns>
+                <from table='cempresa'>
+                    <join type='inner' table='ctercero'>
+                        <on>cempresa.tercer = ctercero.codigo</on>
+                    </join>
+                    <join type='inner' table='cterdire'>
+                        <on>cempresa.tercer = cterdire.codigo</on>
+                        <on>cempresa.tipdir = cterdire.tipdir</on>
+                        <join type='inner' table='ctiponac'>
+                            <on>cterdire.codnac = ctiponac.codigo</on>
+                        </join>
+                    </join>
+                </from>
+                <where>
+                        cempresa.estado  = 'A'           <!-- Solo empresas en estado abierto -->
+                    <!-- Excluye empresas de consolidación -->
+<!-- Algunos clientes no tienen la tabla cempresa_con
+                    AND cempresa.empcode NOT IN (SELECT c.empcon FROM cempresa_con c)
+-->
+                    AND ctiponac.coda2   = 'ES'          <!-- Solo empresas españolas         -->
+                    AND cempresa.empcode <p_str_empcode mode='unquoted'/>
+                </where>
+                <order>empcode</order>
+            </select>
+            <do>
+
+                <!-- ======================================================================= -->
+                <!-- Devuelve las fechas de inicio y de fin para la presentación de          -->
+                <!-- información al sistema SII.                                             -->
+                <!-- ======================================================================= -->
+                <call name='es_sii_get_fechas' into='m_fecdec_ini, m_fecdec_fin, m_fecreg_fin'>
+                    <cempresa_empcode/>
+                </call>
+
+                <!-- ======================================================================= -->
+                <!-- Si m_fecdec_ini IS NULL la empresa no forma parte del censo SII         -->
+                <!-- Seguimos con la siguiente empresa.                                      -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnull><m_fecdec_ini/></isnull>
+                    </expr>
+                    <then>
+                        <foreach.continue/>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Sobrepasa las fechas de inicio y/o de fin si así se ha indicado en los  -->
+                <!-- argumentos de este proceso.                                             -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_generic_fecdec_ini/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_fecdec_ini'><p_generic_fecdec_ini/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><string.length><cempresa_grpent/></string.length>0</eq>
+                    </expr>
+                    <then>
+                        <set name='cempresa_grpent'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <connection.begin/>
+
+                <!-- ======================================================================= -->
+                <!-- Añade los cobros y/o pagos de las facturas de los terceros emisores     -->
+                <!-- acogidos al RECC Régimen Especial Criterio de Caja.                     -->
+                <!-- ======================================================================= -->
+                <!-- from cimpcont_v cimpcont_head_v y es_sii_facturas where p_str_query -->
+                <local_es_sii_pagos_add>
+                    <m_idversionsii/>
+                    <p_str_query/>
+                    <cempresa_empcode/>
+                    <cempresa_cif/>
+                    <m_fecdec_ini/>
+                </local_es_sii_pagos_add>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <connection.commit/>
+
+                <!-- ======================================================================= -->
+                <!-- Encadenamiento de procesos:                                             -->
+                <!--    1: Añadir cobros/pagos                                               -->
+                <!--    2: Añadir cobros/pagos y generar mensajes                            -->
+                <!--    3: Añadir cobros/pagos, generar y entregar mensajes                  -->
+                <!-- ======================================================================= -->
+                 <if>
+                    <expr>
+                        <and>
+                            <ge><p_modo/>2</ge>
+                            <not><string.matches><p_str_query/><string>*cimpcont*</string></string.matches></not>
+                        </and>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- XSQL es_sii_mr                                                          -->
+                        <!--                                                                         -->
+                        <!-- Proceso principal para la generación de los mensajes de solicitud del   -->
+                        <!-- sistema SII                                                             -->
+                        <!--                                                                         -->
+                        <!-- ======================================================================= -->
+                        <set name='m_str_query_empcode'><string>es_sii_facturas.empcode = <variable.toQuery><cempresa_empcode/></variable.toQuery> AND <p_str_query/></string></set>
+                        <call name='es_sii_mr_lrce_lrpr_18'>
+                            <p_modo/>
+                            <m_str_query_empcode/>
+                        </call>
+                    </then>
+                </if>
+
+            </do>
+        </foreach>
+
+    </body>
+</xsql-script>

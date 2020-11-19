@@ -1,0 +1,206 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<sqltransaction>
+ <atomic>
+<!-- EXPORTING wic_jrep_object cond=[wic_jrep_object.rep_code LIKE 'cur_siicorsinid'] -->
+<insert table='wic_jrep_object'>
+ <row>
+  <rep_role>ICON-CUR</rep_role>
+  <rep_code>cur_siicorsinid</rep_code>
+  <rep_head><![CDATA[Corrección Facturas Error 1100 - Sin ID]]></rep_head>
+  <rep_memo><![CDATA[Corrección Facturas Error 1100 - Sin ID]]></rep_memo>
+  <rep_sort></rep_sort>
+  <rep_render_type>0</rep_render_type>
+  <rep_2jsp></rep_2jsp>
+  <rep_2xsl_qry></rep_2xsl_qry>
+  <rep_2xsl_out></rep_2xsl_out>
+  <rep_refresh>0</rep_refresh>
+  <rep_full>0</rep_full>
+  <rep_proc>3</rep_proc>
+  <auth_pda>0</auth_pda>
+  <auth_soap>1</auth_soap>
+  <auth_extranet>1</auth_extranet>
+  <rep_print_mode>0</rep_print_mode>
+  <rep_query_mode>0</rep_query_mode>
+  <can_sort>1</can_sort>
+  <can_query>1</can_query>
+  <enabled>1</enabled>
+  <http_refresh>0</http_refresh>
+  <query_refresh>0</query_refresh>
+  <rep_lock>0</rep_lock>
+  <rep_size>233</rep_size>
+  <rep_rows>16</rep_rows>
+  <rep_dcrc>3999302E</rep_dcrc>
+  <rep_stmt><![CDATA[ <call name='cur_siicorsinid'>
+   <args>
+      <arg>$EMPCODE</arg>
+   </args>
+</call>
+
+
+<select>
+    <columns>
+       'Fin proceso' AS procfin
+    </columns>
+    <from table="wic_dual"/>
+    <where>
+        1=1
+    </where>
+</select>]]></rep_stmt>
+  <rep_stmt_buffer></rep_stmt_buffer>
+  <rep_sec1></rep_sec1>
+  <rep_sec2></rep_sec2>
+  <rep_vqry></rep_vqry>
+  <rep_info></rep_info>
+  <rep_snap></rep_snap>
+  <user_created>oys.dl</user_created>
+  <date_created dd='29' mm='5' yy='2019' HH='10' MM='47' SS='53'>2019-05-29 10:47:53.0</date_created>
+  <user_updated>oys.dl</user_updated>
+  <date_updated dd='29' mm='5' yy='2019' HH='10' MM='50' SS='6'>2019-05-29 10:50:06.0</date_updated>
+ </row>
+<!-- GETTING exportedKeys of wic_jrep_object -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_colhdr.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_collnk.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_colout.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_colqry.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_colvar.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_filedb.rep_code] query=[1=1] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_form_data.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_form_query.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_object_alias.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_object_info.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_objectrcs.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_styles.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_tabs.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_tested.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_object.rep_code]->fktable[wic_jrep_trxmgr.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_trxmgr cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_tested cond=[rep_code = 'cur_siicorsinid'] -->
+ <insert table='wic_jrep_tested'>
+  <row>
+   <rep_code>{wic_jrep_object.rep_code}</rep_code>
+   <engine>ids</engine>
+   <test_type>Q</test_type>
+   <test_date dd='29' mm='5' yy='2019' HH='11' MM='6' SS='2'>2019-05-29 11:06:02.0</test_date>
+  </row>
+<!-- GETTING exportedKeys of wic_jrep_tested -->
+ </insert>
+<!-- EXPORTING wic_jrep_tabs cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_styles cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_objectrcs cond=[rep_code = 'cur_siicorsinid'] -->
+ <insert table='wic_jrep_objectrcs'>
+  <row>
+   <rep_code>{wic_jrep_object.rep_code}</rep_code>
+   <rcs_vers>1</rcs_vers>
+   <rcs_vers_min>0</rcs_vers_min>
+   <rcs_date dd='29' mm='5' yy='2019' HH='10' MM='47' SS='52'>2019-05-29 10:47:52.0</rcs_date>
+   <rcs_addr>88.12.42.218</rcs_addr>
+   <rcs_size>332</rcs_size>
+   <rcs_rows>18</rcs_rows>
+   <rcs_dcrc>30150135</rcs_dcrc>
+   <rcs_owner>oys.dl</rcs_owner>
+   <rcs_project>INIT_LOAD</rcs_project>
+   <rcs_notes><![CDATA[(INITIAL LOAD)]]></rcs_notes>
+   <rcs_delta><![CDATA[<call name='cur_ecomfach_zip'>
+   <args>
+      <arg>$CODPRO</arg>
+      <arg><expression>$FECINI</expression></arg>
+      <arg><expression>$FECFIN</expression></arg>
+   </args>
+</call>
+
+
+<select>
+    <columns>
+       'Fin proceso' AS procfin
+    </columns>
+    <from table="wic_dual"/>
+    <where>
+        1=1
+    </where>
+</select>]]></rcs_delta>
+  </row>
+<!-- GETTING exportedKeys of wic_jrep_objectrcs -->
+ </insert>
+ <insert table='wic_jrep_objectrcs'>
+  <row>
+   <rep_code>{wic_jrep_object.rep_code}</rep_code>
+   <rcs_vers>1</rcs_vers>
+   <rcs_vers_min>1</rcs_vers_min>
+   <rcs_date dd='29' mm='5' yy='2019' HH='10' MM='48' SS='32'>2019-05-29 10:48:32.0</rcs_date>
+   <rcs_addr>88.12.42.218</rcs_addr>
+   <rcs_size>333</rcs_size>
+   <rcs_rows>6</rcs_rows>
+   <rcs_dcrc>A4FE19DA</rcs_dcrc>
+   <rcs_owner>oys.dl</rcs_owner>
+   <rcs_project>GENERIC</rcs_project>
+   <rcs_notes><![CDATA[Cambio]]></rcs_notes>
+   <rcs_delta><![CDATA[d1 1
+a1 1
+<call name='cur_siicorsinid'>
+d3 3
+a5 1
+      <arg>$EMPCODE</arg>
+]]></rcs_delta>
+  </row>
+<!-- GETTING exportedKeys of wic_jrep_objectrcs -->
+ </insert>
+<!-- EXPORTING wic_jrep_object_info cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_object_alias cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_form_query cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_form_data cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- NOT EXPORTING wic_jrep_filedb child_query=[1=1] cause all cols are nullable in fkey -->
+<!-- EXPORTING wic_jrep_colvar cond=[rep_code = 'cur_siicorsinid'] -->
+ <insert table='wic_jrep_colvar'>
+  <row>
+   <rep_code>{wic_jrep_object.rep_code}</rep_code>
+   <var_cpos>1</var_cpos>
+   <var_name>empcode</var_name>
+   <tab_name>cimpcont</tab_name>
+   <var_desc></var_desc>
+   <var_type>C</var_type>
+   <var_cons>0</var_cons>
+   <var_href><![CDATA[cempresa.empcode]]></var_href>
+   <var_data><![CDATA[*]]></var_data>
+   <var_case>1</var_case>
+   <var_format></var_format>
+   <inc_type></inc_type>
+   <inc_code></inc_code>
+  </row>
+<!-- GETTING exportedKeys of wic_jrep_colvar -->
+ </insert>
+<!-- EXPORTING wic_jrep_colqry cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_colout cond=[rep_code = 'cur_siicorsinid'] -->
+ <insert table='wic_jrep_colout'>
+  <row>
+   <rep_code>{wic_jrep_object.rep_code}</rep_code>
+   <col_no>2</col_no>
+   <tab_name>wic_dual</tab_name>
+   <col_name>procfin</col_name>
+   <col_real></col_real>
+   <grp_flag>0</grp_flag>
+   <grp_head>0</grp_head>
+   <sum_flag>N</sum_flag>
+   <por_flag>N</por_flag>
+   <por_col1></por_col1>
+   <por_col2></por_col2>
+   <gfx_flag></gfx_flag>
+   <col_hide>0</col_hide>
+   <col_input>0</col_input>
+   <num_decs>-1</num_decs>
+  </row>
+<!-- GETTING exportedKeys of wic_jrep_colout -->
+<!-- pktable=[wic_jrep_colout.rep_code]->fktable[wic_jrep_form_cols.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_colout.col_name]->fktable[wic_jrep_form_cols.col_name] query=[col_name = 'procfin'] -->
+<!-- pktable=[wic_jrep_colout.rep_code]->fktable[wic_jrep_form_cols_refs.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_colout.col_name]->fktable[wic_jrep_form_cols_refs.col_dest] query=[col_dest = 'procfin'] -->
+<!-- pktable=[wic_jrep_colout.rep_code]->fktable[wic_jrep_form_hide.rep_code] query=[rep_code = 'cur_siicorsinid'] -->
+<!-- pktable=[wic_jrep_colout.col_name]->fktable[wic_jrep_form_hide.hide_colname] query=[hide_colname = 'procfin'] -->
+<!-- EXPORTING wic_jrep_form_hide cond=[rep_code = 'cur_siicorsinid' AND hide_colname = 'procfin'] -->
+<!-- EXPORTING wic_jrep_form_cols_refs cond=[rep_code = 'cur_siicorsinid' AND col_dest = 'procfin'] -->
+<!-- EXPORTING wic_jrep_form_cols cond=[rep_code = 'cur_siicorsinid' AND col_name = 'procfin'] -->
+ </insert>
+<!-- EXPORTING wic_jrep_collnk cond=[rep_code = 'cur_siicorsinid'] -->
+<!-- EXPORTING wic_jrep_colhdr cond=[rep_code = 'cur_siicorsinid'] -->
+</insert>
+ </atomic>
+</sqltransaction>

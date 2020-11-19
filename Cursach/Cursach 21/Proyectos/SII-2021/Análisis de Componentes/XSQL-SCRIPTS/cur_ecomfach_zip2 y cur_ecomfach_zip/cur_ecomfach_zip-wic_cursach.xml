@@ -1,0 +1,188 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_get_nif_idotro_18                                           -->
+<!--                                                                         -->
+<!-- Devuelve tags NIF y IDOtro                                              -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_get_nif_idotro_18'>
+
+        <args>
+            <arg name='p_libro'                 type='string' />
+            <arg name='p_empcode'               type='string' />
+            <arg name='p_niftitular'            type='string' />
+            <arg name='p_head_seqno'            type='integer' />
+            <arg name='p_tipofactura'           type='string' />
+            <arg name='p_idversionsii'          type='string' />
+            <arg name='p_tipocomunicacion'      type='string' />    <!-- A0  Alta de facturas/registro                                -->
+                                                                    <!-- A1  Modificación de facturas/registros (errores registrales) -->
+                                                                    <!-- A4  Modificación Factura Régimen de Viajeros                 -->
+                                                                    <!-- B   Baja. ( Adaptación Axional )                             -->
+            <arg name='p_nifcontraparte'        type='string' />    <!-- NIF contraparte origen cimpcont_head_cif -->
+        </args>
+
+    <body>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <null name='r_coda2' />
+        <null name='r_idtype' />
+        <null name='r_nif_otro' />
+        <set name='m_informar_nocensado'><true/></set>
+        <include code='es_sii_get_nif_idotro' name='before' />
+
+        <!-- ======================================================================= -->
+        <!-- El contenido de p_nifcontraparte debe ser autosuficiente para determinar-->
+        <!-- el país y a partir del país determinar si es intracomunitario o no.     -->
+        <!-- El motivo es que para comunicar las bajas de facturas no disponemos de  -->
+        <!-- soporte en cimpcont_head y por lo tanto tampoco de cimpcont que es      -->
+        <!-- donde se ubica el código de país.                                       -->
+        <!-- ======================================================================= -->
+        <set name='m_nif_spain'><p_nifcontraparte/></set>
+        <set name='m_len'><string.length><p_nifcontraparte/></string.length></set>
+        <if>
+            <expr>
+                <le><m_len/>2</le>
+            </expr>
+            <then>
+                <set name='m_str_nif'><p_nifcontraparte/></set>
+                <set name='m_str_idotro'><string/></set>
+                <return>
+                    <m_nif_spain/>
+                    <m_str_nif/>
+                    <r_coda2/>
+                    <r_idtype/>
+                    <r_nif_otro/>
+                </return>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Obtiene NIF, País, idtype, etc.                                         -->
+        <!-- IDType                                                                  -->
+        <!-- L4 Tipos de Identificación en el país de residencia  (Pag 71)           -->
+        <!--    02 NIF-IVA                                                           -->
+        <!--    03 PASAPORTE                                                         -->
+        <!--    04 DOCUMENTO OFICIAL DE IDENTIFICACIÓN EXPEDIDO POR EL PAIS O TERRITORIO DE RESIDENCIA -->
+        <!--    05 CERTIFICADO DE RESIDENCIA                                         -->
+        <!--    06 OTRO DOCUMENTO PROBATORIO                                         -->
+        <!--    07 NO CENSADO ( Opcional en Libro registro de facturas expedidas )   -->
+        <!-- ======================================================================= -->
+        <set name='m_coda2'><string.substring><p_nifcontraparte/><number>0</number><number>2</number></string.substring></set>
+        <if>
+            <expr>
+                <string.regexp><m_coda2/><string>[A-Z]{2,2}</string></string.regexp>
+            </expr>
+            <then>
+
+                <!-- 07-07-2017 ATENCIÓN EXCEPCIÓN VATs GRIEGOS:
+                     Los VATs de peronas griegas empiezan por EL (ISO 3166-1) en vez de GR (ISO 3166-1)
+                     VAT identification number
+                     The full identifier starts with an ISO 3166-1 alpha-2 (2 letters) country code (except for Greece, which uses the ISO 639-1 language code EL for the Greek language, instead of its ISO 3166-1 alpha-2 country code GR) and then has between 2 and 13 characters. The identifiers are composed of numeric digits in most countries, but in some countries they may contain letters.
+                -->
+                <if>
+                    <expr>
+                        <eq><m_coda2/><string>EL</string></eq>
+                    </expr>
+                    <then>
+                        <set name='m_coda2'><string>GR</string></set>
+                    </then>
+                </if>
+
+                <select prefix='m_'>
+                    <columns>
+                        ctiponac.coda2,
+                        CASE WHEN ctiponac.coda2 = 'ES'
+                                  THEN CASE WHEN <substr><p_nifcontraparte/>,1,2</substr> = 'ES'
+                                            THEN <substr><p_nifcontraparte/>,3,11</substr>
+                                            ELSE <substr><p_nifcontraparte/>,1,9</substr>
+                                        END
+                                  ELSE NULL
+                         END AS nif_spain,
+                        CASE WHEN ctiponac.coda2  = 'ES'                        THEN NULL
+                             WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 1 THEN '02'
+                             WHEN ctiponac.coda2 != 'ES' AND ctiponac.indue = 0 THEN '04'
+                             ELSE '06'
+                         END AS idtype,
+                        CASE WHEN ctiponac.indue = 1 THEN <p_nifcontraparte/>      <!-- No suprime el código de país (coda2) de intracomunitarios ! -->
+                                  ELSE CASE WHEN ctiponac.coda2 = <substr><p_nifcontraparte/>,1,2</substr>
+                                            THEN <substr><p_nifcontraparte/>,3</substr>
+                                            ELSE <p_nifcontraparte/>
+                                        END
+                         END AS nif_otro
+                    </columns>
+                    <from table='ctiponac'/>
+                    <where>
+                            ctiponac.coda2 = <m_coda2/>
+                    </where>
+                </select>
+                <if>
+                    <expr>
+                        <isnull><m_nif_otro/></isnull>
+                    </expr>
+                    <then>
+                        <set name='m_nif_spain'><p_nifcontraparte/></set>
+                    </then>
+                </if>
+                <!-- ======================================================================= -->
+                <!-- Si NIF Otro es igual a cero no es un documento oficial aunque tampoc es -->
+                <!-- probatorio de nada!                                                     -->
+                <!--    04 DOCUMENTO OFICIAL DE IDENTIFICACIÓN EXPEDIDO POR EL PAIS O TERRITORIO DE RESIDENCIA -->
+                <!--    06 OTRO DOCUMENTO PROBATORIO                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><m_nif_otro/>0</eq>
+                            <eq><m_idtype/><string>04</string></eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_idtype'><string>06</string></set>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- NIF                                                                     -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <isnotnull><m_nif_spain/></isnotnull>
+            </expr>
+            <then>
+                <!-- ======================================================================= -->
+                <!-- NIF español                                                             -->
+                <!-- ======================================================================= -->
+                <set name='m_str_nif'><m_nif_spain/></set>
+            </then>
+            <else>
+                <!-- ======================================================================= -->
+                <!-- NIF extranjero                                                          -->
+                <!-- ======================================================================= -->
+                <set name='m_str_nif'><string/></set>
+                <set name='r_coda2'><m_coda2 /></set>
+                <set name='r_idtype'><m_idtype /></set>
+                <set name='r_nif_otro'><m_nif_otro /></set>
+            </else>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include code='es_sii_get_nif_idotro' name='after' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <return>
+            <m_nif_spain/>
+            <m_str_nif/>
+            <r_coda2 />
+            <r_idtype />
+            <r_nif_otro />
+        </return>
+    </body>
+</xsql-script>

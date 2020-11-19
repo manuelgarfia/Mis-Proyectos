@@ -1,0 +1,40 @@
+<!-- ========================================================================== -->
+<!--                                                                            -->
+<!--    es_sii_get_is_eur()                                                     -->
+<!--                                                                            -->
+<!--    Devuelve 1 (true) o 0 (false) si la zona impositiva del tercero         -->
+<!--    pertenece a la unión europea.                                           -->
+<!--                                                                            -->
+<!-- ========================================================================== -->
+<function name='es_sii_get_is_eur'>
+    <args>
+        <arg name='p_zimter'        like='czonaimp.codigo' />   <!-- Código zona impositiva de la contraparte, tercero cliente o proveedor. -->
+    </args>
+
+    <returns type='smallint' />
+    <define>
+        <variable name='m_is_eur'       type='smallint' />
+    </define>
+    <body>
+
+        <!-- ==================================================================== -->
+        <!--                                                                      -->
+        <!-- ==================================================================== -->
+        <set name='m_is_eur'>NULL</set>
+        <include name='before' />
+
+        <if><expr>m_is_eur IS NULL</expr>
+            <then>
+                <select>COUNT(*)
+                  <into>m_is_eur</into>
+                   FROM czonaimp
+                  WHERE codigo  = p_zimter
+                    AND intras  = 1
+                    AND codigo NOT IN ('NAC', 'ESCO')
+                </select>
+            </then>
+        </if>
+
+        <return>m_is_eur</return>
+    </body>
+</function>

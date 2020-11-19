@@ -1,0 +1,41 @@
+<!-- ================================================================================ -->
+<!--                                                                                  -->
+<!--    XSQL: cur_es_sii_borrar_preparacion                                           -->
+<!--                                                                                  -->
+<!--    Parámetros: head_seqno de la Factura                                          -->
+<!--                                                                                  -->
+<!--    Objeto: Borrar una es_sii_factura para permitir la manipulación de cimpcont   -->
+<!-- ================================================================================ -->
+<xsql-script name='cur_es_sii_borrar_preparacion'>
+    <args>
+        <arg name='p_head_seqno' type='integer'/>
+    </args>
+    <body>
+	
+		<select prefix='m_' required='La factura con identificador [#p_head_seqno] no se puede despreparar'>
+			<columns>sii_estado</columns>
+			<from table='es_sii_facturas'/>
+			<where>head_seqno = <p_head_seqno/> AND 
+			(es_sii_facturas.erp_estado = 'P' OR (es_sii_facturas.erp_estado = 'E' AND es_sii_facturas.sii_estado = '3'))</where>
+		</select>
+		
+		<!-- ====================================================== -->
+		<!-- Borrar la factura                                      -->
+		<!-- ====================================================== -->
+		
+		<delete table='es_sii_facturas'>
+			<where>head_seqno = <p_head_seqno/></where>
+		</delete>
+
+		<!-- ====================================================== -->
+		<!-- Dejar la Cabecera de impuestos lista para volver a     -->
+		<!-- preparar (No Declarada)                                -->
+		<!-- ====================================================== -->
+		
+		<update table='cimpcont_head'>
+			<column name='head_status'>0</column>
+			<where>head_seqno = <p_head_seqno/></where>
+		</update>
+		
+	</body>
+</xsql-script>	

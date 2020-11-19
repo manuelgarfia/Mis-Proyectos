@@ -1,0 +1,65 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XUDF es_sii_get_is_supplied()                                           -->
+<!--                                                                         -->
+<!-- Indica si en un suplido y por lo tanto no debemos comunicarlo al censo  -->
+<!-- SII.                                                                    -->
+<!--                                                                         -->
+<!-- Devuelve:                                                               -->
+<!--     1  Es un suplido.                                                   -->
+<!--     0  No es un suplido.                                                -->
+<!--                                                                         -->
+<!-- Esta función se requiere para no informar al censo SII las bases        -->
+<!-- de impuestos que generalmente corresponden a gastos SUPLIDOS.           -->
+<!--                                                                         -->
+<!-- Se utiliza desde:                                                       -->
+<!--     XUDP cimpcont_head_upgrade                                          -->
+<!--     XSQL es_sii_get_values                                              -->
+<!--     XSQL es_sii_mr_lrfe                                                 -->
+<!--     XSQL es_sii_mr_lrfr                                                 -->
+<!--                                                                         -->
+<!-- ATENCIÓN:                                                               -->
+<!-- En próximas revisiones del módulo ERP Finanzas los registros en         -->
+<!-- cimpcont que cotrrespondan a suplidos (No son IVA ni Retenciones)       -->
+<!-- podrían marcarse en cimpcont.tipimp con valor S                         -->
+<!--                                                                         -->
+<!-- A modo de ejemplo:                                                      -->
+<!--     cimpcont.tipimp = N IVA Normal                                      -->
+<!--     cimpcont.tipimp = E IVA Recargo de Equivalencia                     -->
+<!--     cimpcont.tipimp = S Suplido. No es IVA                              -->
+<!--     cimpcont.tipimp = R Retención. No es IVA                            -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<function name='es_sii_get_is_supplied'>
+    <args>
+        <arg name='p_opeimp'                like='cimpcont.opeimp' />
+    </args>
+
+    <returns type='smallint' />
+    <define>
+        <variable name='m_is_suplido'       type='smallint' />
+    </define>
+    <body>
+
+        <!-- ======================================================================= -->
+        <!-- Posible código particularizado de customizacion.                        -->
+        <!-- ======================================================================= -->
+        <include name='before' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <select>COUNT(*)
+          <into>m_is_suplido</into>
+           FROM coperimp
+          WHERE opeimp = p_opeimp
+            AND nomope LIKE '%(SUP)%'
+        </select>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <return>m_is_suplido</return>
+
+    </body>
+</function>

@@ -1,0 +1,10 @@
+        <!-- ======================================================================= -->
+        <!-- EXCLUSIÓN CURSACH                                                       -->
+        <!-- Prescindimos de las operaciones TND, CNX, NSJ que no son facturas       -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>p_opeimp IN ('TND', 'CNX', 'NSJ')</expr>
+            <then>
+                <return/>
+            </then>
+        </if>

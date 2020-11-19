@@ -1,0 +1,118 @@
+        <!-- ========================================================== -->
+        <!-- Asteriscamos ya que la select de la cimpcont_head_aux se     -->
+        <!-- obtiene en el script es_sii_get_values                      -->
+        <!-- <select prefix='m_'>                                        -->
+        <!--    <columns>last_numfactura, inm_refer_catastral</columns> -->
+        <!--    <from table='cimpcont_head_aux'/>                       -->
+        <!--    <where>head_seqno = <p_head_seqno/></where>             -->
+        <!-- </select>                                                   -->
+        <!-- ========================================================== -->
+        <!-- ========================================================== -->
+        <!-- Revisamos si hay último número de factura para             -->
+        <!-- concluir si es F4 independientemente de la parametrización -->
+        <!-- ========================================================== -->
+
+        <!-- ========================================================== -->
+        <!-- Revisamos si hay último número de factura para             -->
+        <!-- concluir si es F4 independientemente de la parametrización -->
+        <!-- ========================================================== -->
+        <if>
+            <expr>
+                <!--<isnotnull><m_last_numfactura/></isnotnull>-->
+                <isnotnull><cimpcont_head_aux_last_numfactura/></isnotnull>
+            </expr>
+            <then>
+                <set name='m_tipofactura'>F4</set>
+			
+				<if>
+					<expr>
+                        <!--<eq><p_docser/><m_last_numfactura/></eq>-->
+                        <eq><p_docser/><cimpcont_head_aux_last_numfactura/></eq>
+					</expr>
+					<then>
+						<set name='m_tipofactura'>F2</set>
+
+					</then>
+				</if>
+            </then>
+        </if>
+        
+        <!-- ========================================================== -->
+        <!-- Revisamos si hay Referencia Catastral concluiremos que es  -->
+        <!-- operación de alquiler                                      -->
+        <!-- ========================================================== -->
+
+        <if>
+            <expr>
+                <!--<isnotnull><m_inm_refer_catastral/></isnotnull>-->
+                <isnotnull><cimpcont_head_aux_inm_refer_catastral/></isnotnull>
+            </expr>
+            <then>
+
+                <select prefix='m_'>
+                    <columns>COUNT(*) contar</columns>
+                    <from table='cimpcont'/>
+                    <where>empcode = <p_empcode/> AND jusser = <p_jusser/> AND docser = <p_docser/> AND natfac = <p_natfac/> AND tipimp = 'R'</where>
+                </select>
+                
+                <set name='m_claveoperaciona0'>11</set>
+                
+                <if>
+                    <expr><eq><m_contar/>0</eq></expr>
+                    <then>
+                        <set name='m_claveoperaciona0'>12</set>
+                    </then>
+                </if>
+                
+            </then>
+        </if>
+
+        <!-- ========================================================== -->
+        <!-- En HOTEL miramos si el CIF es Directos entonces ponemos F2 -->
+        <!-- ========================================================== -->
+        
+        <if>
+            <expr>
+                <eq><m_tipofactura/>F1</eq><and/>
+                <eq><p_empcode/>33</eq><and/>
+                <eq><p_natfac/>V</eq>
+            </expr>
+            <then>
+                
+                <select prefix='m_'>
+                    <columns>FIRST 1 cif</columns>
+                    <from table='cimpcont'/>
+                    <where>empcode = <p_empcode/> AND jusser = <p_jusser/> AND docser = <p_docser/></where>
+                </select>
+                
+                <if>
+                    <expr><eq><m_cif/><string>Directos</string></eq></expr>
+                    <then>
+                        <set name='m_tipofactura'>F2</set>
+                    </then>
+                </if>
+                
+            </then>
+        </if>      
+        <!-- ============================================================== -->
+        <!--  Debido a que cuando se da el caso de FR, devuelve             -->
+        <!--  tanto la claveoperaciona0=07 pero también la claveoperaciona1 -->
+        <!--  en tal caso, se vacía para no dar Error parcial de entrega al -->
+        <!--  SII, error número 2018 El campo ClaveREgimenEspecialOTrascend -->
+        <!--  enciaAdicional1 no es compatible con la ClaveRegimenEspecialO -->
+        <!--  Transcendencia informada                                      -->
+        <!--  Hasta día de hoy se solucionaba manualmente quitando esa info -->
+        <!-- En el estándar de Axional no hay ajuste del caso               -->
+        <!-- ============================================================== -->
+        <if>
+            <expr>
+                <and>
+                    <eq><p_libro/><string>FR</string></eq>
+                    <eq><m_tipofactura/><string>F1</string></eq>
+                    <eq><m_claveoperaciona0/><string>07</string></eq>
+                </and>
+            </expr>
+            <then>
+                <null name='m_claveoperaciona1'/>
+            </then>
+        </if>

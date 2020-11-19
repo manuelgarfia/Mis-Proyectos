@@ -1,0 +1,105 @@
+<xsql-script name='cur_ecomfach_zip'>
+    <args>
+        <arg name='p_codpro' type='string' />
+        <arg name='p_fecini'  type='date' />
+        <arg name='p_fecfin'  type='date' />
+    </args>       
+    <body>
+
+<foreach>
+      <select prefix ='m_'>
+         <columns>
+            ctercero.codigo codpro      
+         </columns>
+         <from table = 'ctercero'/>
+         <where>
+            ctercero.codigo <p_codpro mode='unquoted'/>
+		 </where>
+      </select>
+	  <do>
+	      
+
+	
+    <set name='nombre_f'><add><m_codpro/>-<p_fecini/>-<p_fecfin/>.zip</add></set>
+
+       <file.out.open id='#nombre_f' append='true'>
+           <file name='#nombre_f' type='disktool' />
+       </file.out.open>
+        <map name='ficheros'/>  
+       
+<foreach>
+      <select prefix ='m_'>
+         <columns>
+            cur_ecomfach.cabid, gcomfach.docser       
+         </columns>
+         <from table = 'gcomfach'>
+            <join table='cur_ecomfach'>
+              <on>cur_ecomfach.docser = gcomfach.docser</on>
+            </join>
+         </from>
+         <where>
+            gcomfach.tercer = <m_codpro/>
+            AND
+            gcomfach.feccon BETWEEN <p_fecini/> AND <p_fecfin/>      
+		 </where>
+      </select>
+      <do>
+
+<!-- le hemos quitado esto a este select para cambiar por el docser de factura como nombre <columns> file_name file_name1</columns> -->
+  <select prefix='m_'>
+        <columns>
+           FIRST 1 file_data file_data1
+        </columns>
+        <from table='cur_ecomfach_docs' />
+        <where>
+           cabid = <m_cabid/>
+        </where>
+    </select>
+
+    <set name='m_file_name1'><add><m_docser/>.xml</add></set>
+
+       <file.bytes.write append='true' encoding-dst='UTF-8'>
+           <file name='#m_file_name1' type='temp' />
+           <m_file_data1/>
+       </file.bytes.write> 
+
+       
+
+<!--
+    <select prefix='m_'>
+        <columns>
+           file_data file_data2, file_name file_name2
+        </columns>
+        <from table='cur_ecomfach_docs' />
+        <where>
+           cabid = 3289
+        </where>
+    </select>
+-->
+<!--
+       <file.bytes.write append='true' encoding-dst='UTF-8'>
+           <file name='#m_file_name2' type='temp' />
+           <m_file_data2/>
+       </file.bytes.write>  
+-->
+
+
+      <map.put name='ficheros'><m_file_name1/><file name='#m_file_name1' type='temp' /></map.put>
+                 
+       <file.out.write id='#nombre_f' append='true'>
+           <zip.zip>
+             <ficheros/>
+           </zip.zip>
+       </file.out.write>
+        
+        
+  </do>         
+</foreach>  
+
+<file.out.close id='#nombre_f'/>
+
+  </do>         
+</foreach>  
+       
+    </body>            
+</xsql-script>

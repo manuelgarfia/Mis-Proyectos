@@ -1,0 +1,1458 @@
+<!-- ======================================================================= -->
+<!--                                                                         -->
+<!-- XSQL es_sii_get_values_18                                               -->
+<!--                                                                         -->
+<!-- Obtiene los valores sensibles de la factura para preparar la            -->
+<!-- declaración al sistema SII.                                             -->
+<!--                                                                         -->
+<!--    Ejercicio.                                                           -->
+<!--    Periodo.                                                             -->
+<!--    Importe total de la factura                                          -->
+<!--    Tipo de factura SII.                                                 -->
+<!--    Clave de operación SII.                                              -->
+<!--    Descripción de la operación.                                         -->
+<!--                                                                         -->
+<!-- FUNC local_reordenar_operaciones                                        -->
+<!-- FUNC local_get_periodo                                                  -->
+<!--                                                                         -->
+<!-- ======================================================================= -->
+<xsql-script name='es_sii_get_values_18'>
+
+    <args>
+        <arg name='p_head_seqno'            type='integer' />
+        <arg name='p_orden'                 type='integer' />
+        <arg name='p_empcode'               type='string' />
+        <arg name='p_grpent'                type='string' />
+        <arg name='p_proyec'                type='string' />
+        <arg name='p_seccio'                type='string' />
+        <arg name='p_tercer'                type='string' />
+        <arg name='p_tipdir'                type='string' />
+        <arg name='p_zimfis'                type='string' />
+        <arg name='p_zimter'                type='string' />
+        <arg name='p_opeimp'                type='string' />
+        <arg name='p_nomope'                type='string' />
+        <arg name='p_descoperacion'         type='string' />
+        <arg name='p_docrec'                type='string' />
+        <arg name='p_fecrec'                type='date' />
+        <arg name='p_jusser'                type='string' />
+        <arg name='p_docser'                type='string' />
+        <arg name='p_natfac'                type='string' />
+        <arg name='p_libro'                 type='string' />
+        <arg name='p_fecope'                type='date' />
+        <arg name='p_fecdoc'                type='date' />
+        <arg name='p_fecha'                 type='date' />
+        <arg name='p_date_created'          type='timestamp' />
+        <arg name='p_cif_contraparte'       type='string' />
+        <arg name='p_cashvat'               type='integer' />
+        <arg name='p_valida'                type='string' />
+        <arg name='p_numefe'                type='integer' />
+        <arg name='p_is_eur'                type='smallint' />
+        <arg name='p_hay_retenciones'       type='smallint' />
+        <arg name='p_idversionsii'          type='string' />
+    </args>
+
+    <body>
+
+
+<!--
+FACTURAS DE VENTAS          SII    17-05-2017    Versión 0.7
+
+    07 - Régimen especial criterio de caja
+        01 - Régimen general
+        03 - REBU
+        05 - Agencias de viajes
+        09 - Agencias de viajes
+        11, 12 y 13 - Arrendamiento local de negocios
+        14 - IVA pendiente de devengo. Certificaciones de obra pública
+        15 - IVA pendiente de devengo. Tracto sucesivo
+
+    05 - Régimen especial de agencias de viaje
+        01 - Régimen general
+        07 - Criterio de caja
+        11, 12 y 13 - Arrendamiento local de negocios
+
+    06 - Régimen especial grupo de IVA nivel avanzado
+        11, 12 y 13 - Arrendamiento local de negocios
+        14 - IVA pendiente de devengo. Certificaciones de obra pública
+        15 - IVA pendiente de devengo. Tracto sucesivo
+
+    11, 12 y 13 - Arrendamiento local de negocios
+        06 - Grupo de entidades (nivel avanzado)
+        07 - Criterio de caja
+        08 - Operaciones sujetas a IGIC, IPSI
+        15 - IVA pendiente de devengo. Tracto sucesivo
+
+    Consideraciones:
+        La clave 07 (Criterio de caja) siempre debe ser la primera clave a informar.
+        La clave 05 (Agencias de viajes) debe ser la primera clave a informar salvo que concurra con la clave 07 (RECC).
+        La clave 06 (Régimen especial grupo de entidades en IVA-nivel avanzado) debe ser la primera clave a informar cuando concurra con las claves 11, 12, 13, 14 y 15.
+
+FACTURAS DE COMPRAS         SII    17-05-2017    Versión 0.7
+
+    Claves compatibles
+
+    07 - Régimen especial criterio de caja
+        01 - Régimen general
+        03 - REBU
+        05 - Agencias de viajes
+        12 - Arrendamiento local de negocios
+
+    05 - Régimen especial de agencias de viaje
+        01 - Régimen general
+        07 - Criterio de caja
+        12 - Arrendamiento local de negocios
+
+    12 - Arrendamiento
+        05 - Agencias de viajes
+        06 - Grupo de entidades
+        07 - Criterio de caja
+        08 - Operaciones sujetas a IGIC, IPSI
+
+    Consideraciones:
+        La clave 07 (Criterio de caja) siempre debe ser la primera clave a informar.
+        La clave 05 (Agencias de viajes) debe ser la primera clave a informar salvo que concurra con la clave 07 (Criterio de caja).
+        La clave 06 (Régimen especial grupo de entidades en IVA-nivel avanzado) debe ser la primera clave a informar cuando concurra con la clave 12.
+-->
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_reordenar_operaciones                                        -->
+        <!--                                                                         -->
+        <!-- Reordena los códigos de las operaciones según especificaciones.         -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas y recibidas:                                          -->
+        <!--     05  Régimen especial de agencias de viaje                           -->
+        <!--     06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)     -->
+        <!--     07  Régimen especial criterio de caja                               -->
+        <!-- Facturas emitidas:                                                      -->
+        <!--     11  Arrendamiento local de negocio sujetas a retención              -->
+        <!--     12  Arrendamiento local de negocio no sujetas a retención           -->
+        <!-- Facturas recibidas:                                                     -->
+        <!--     12  Operaciones de arrendamiento de local de negocio                -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_reordenar_operaciones'>
+            <args>
+                <arg name='p_head_seqno'            type='integer' />
+                <arg name='p_natfac'                type='string' />
+                <arg name='p_claveoperaciona0'      type='string' />
+                <arg name='p_claveoperacion_05'     type='string' />
+                <arg name='p_claveoperacion_06'     type='string' />
+                <arg name='p_claveoperacion_07'     type='string' />
+                <arg name='p_claveoperacion_11'     type='string' />
+                <arg name='p_claveoperacion_12'     type='string' />
+                <arg name='p_claveoperacion_14'     type='string' />
+            </args>
+            <body>
+<!--
+<set name='p_claveoperaciona0' type='string'><string>08</string></set>
+<set name='p_claveoperacion_05' type='string'><null/></set>
+<set name='p_claveoperacion_06' type='string'><string>06</string></set>
+<set name='p_claveoperacion_07' type='string'><null/></set>
+<set name='p_claveoperacion_11' type='string'><string>11</string></set>
+-->
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <set name='m_claveoperaciona0'><null/></set>
+                <set name='m_claveoperaciona1'><null/></set>
+                <set name='m_claveoperaciona2'><null/></set>
+                <set name='m_num'>-1</set>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <isnotnull><p_claveoperacion_06/></isnotnull>
+                            <isnotnull><p_claveoperacion_07/></isnotnull>
+                        </and>
+                    </expr>
+                    <then>
+                        <exception><string>Error en la definición de los códigos de operación [06] y [07]. <string.nl/>No pueden coexistir [06] Régimen especial grupo de entidades en IVA (Nivel Avanzado) y [07] Régimen especial criterio de caja. <string.nl/>Identificador: [<p_head_seqno/>]</string></exception>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperacion_06/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperacion_06/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperacion_07/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperacion_07/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperaciona0/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperaciona0/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperacion_11/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperacion_11/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperacion_12/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperacion_12/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnotnull><p_claveoperacion_14/></isnotnull>
+                    </expr>
+                    <then>
+                        <set name='m_num'><add><m_num/><number>1</number></add></set>
+                        <set name='m_claveoperaciona${m_num}'><p_claveoperacion_14/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <gt><m_num/>3</gt>
+                    </expr>
+                    <then>
+                        <exception><string>Se ha excedido el número máximo de tres operaciones en una misma factura. <string.nl/>Identificador: [<p_head_seqno/>]</string></exception>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <return>
+                    <m_claveoperaciona0/>
+                    <m_claveoperaciona1/>
+                    <m_claveoperaciona2/>
+                </return>
+
+            </body>
+        </function>
+
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_get_periodo                                                  -->
+        <!--                                                                         -->
+        <!-- Calcula el periodo impositivo.                                          -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <function name='local_get_periodo'>
+            <args>
+                <arg name='p_today'                 type='date' />
+                <arg name='p_head_seqno'            type='integer' />
+                <arg name='p_empcode'               type='string' />
+                <arg name='p_libro'                 type='string' />
+                <arg name='p_fecope'                type='date' />
+                <arg name='p_fecdoc'                type='date' />
+                <arg name='p_fecha'                 type='date' />
+                <arg name='p_date_created'          type='timestamp' />
+                <arg name='p_fecrec'                type='date' />
+                <arg name='p_docrec'                type='string' />
+                <arg name='p_fecha_base_periodo'    type='date' />
+                <arg name='p_importetotal'          type='decimal' />
+                <arg name='p_tipofactura'           type='string' />
+                <arg name='p_claveoperaciona0'      type='string' />
+                <arg name='p_claveoperaciona1'      type='string' />
+                <arg name='p_claveoperaciona2'      type='string' />
+                <arg name='p_fechainicio'           type='date' />
+            </args>
+            <body>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <include code='es_sii_get_values' name='before_get_periodo' />
+
+                <!-- ======================================================================= -->
+                <!-- Ejercicio y periodo impositivo de la factura                            -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <isnull><p_fecha_base_periodo/></isnull>
+                    </expr>
+                    <then>
+
+                        <!-- PERIODO VENTAS - FACTURAS EMITIDAS -->
+                        <if>
+                            <expr>
+                                <eq><p_libro/>FE</eq>
+                            </expr>
+                            <then>
+                                <!-- ATENCIÓN: En ventas la fecha de Servicio o Entrega determina el periodo contable -->
+                                <set name='p_fecha_base_periodo'><p_fecope/></set>
+
+                                <!-- ======================================================================= -->
+                                <!-- PERIODO FACTURA RECTIFICATIVA: Solo en Ventas                           -->
+                                <!-- Si es una factura rectificativa toma la fecha de la operación           -->
+                                <!-- porque ésta debería corresponder a la fecha de operacón del abono.      -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <or>
+                                            <lt><p_importetotal/>0</lt>
+                                            <isnotnull><p_docrec/></isnotnull>
+                                            <isnotnull><p_fecrec/></isnotnull>
+                                        </or>
+                                    </expr>
+                                    <then>
+                                        <!-- ======================================================================= -->
+                                        <!-- 12-06-2017 MT En facturas rectificativas tomaremos como base de cálculo -->
+                                        <!-- del periodo impositivo la fecha de emisión de la factura en vez de la   -->
+                                        <!-- fecha de la operación.                                                  -->
+                                        <!-- ======================================================================= -->
+                                        <set name='p_fecha_base_periodo'><p_fecdoc/></set>
+                                    </then>
+                                </if>
+
+                            </then>
+                        </if>
+                        <!-- PERIODO COMPRAS - FACTURAS RECIBIDAS -->
+                        <if>
+                            <expr>
+                                <eq><p_libro/>FR</eq>
+                            </expr>
+                            <then>
+
+                                <set name='p_fecha_base_periodo'><p_today/></set>
+                                <set name='m_fecha_registro' type='date'><date><p_date_created/></date></set>
+
+                                <!-- ======================================================================= -->
+                                <!-- Ajuste para cálculo del período impositivo en facturas del primer       -->
+                                <!-- semestre.                                                               -->
+                                <!-- ======================================================================= -->
+                                <if>
+                                    <expr>
+                                        <lt><m_fecha_registro/><date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy></lt>
+                                    </expr>
+                                    <then>
+                                        <set name='p_fecha_base_periodo'><p_fecha/></set>
+                                    </then>
+                                </if>
+
+                                <!-- PERIODO COMPRAS Aclariments MT 30-03-2017
+                                    Com a criteri general es definiria el període de liquidació segons el següent:
+                                        Per a factures introduïdes fins el dia 15 del mes, indicar el mes anterior (Exemple exposat anteriorment)
+                                        Per a factures introduïdes a partir del dia 15 del mes, indicar el mes en curs
+
+                                    S'ha de remetre la informació a l'AEAT:
+                                        4 dies des de la data del registre comptable
+                                        I, en tot cas, abans del dia 16 del mes següent al període de liquidació en que s'han inclòs operacions corresponents
+
+                                        Data alta factura sistema = 14/02/2017
+                                        Data factura              = 28/01/2017
+                                        Data operació             = 05/01/2017
+                                        Període liquidació        = gener o febrer   Si poses gener,  tens fins el 15/02/17 per remetre informació AEAT
+                                                                                     Si poses febrer, tens fins el 15/03/17 per remetre informació AEAT
+
+                                    Període liquidació factures rectificatives MT 12-06-2017
+
+                                        Les factures rectificatives han d’indicar com a data d’operació la data d’operació de la factura a la qual rectifiquen, però com el període de liquidació de factures emeses va en funció de la data d’operació, llavors pots estar modificant períodes tancats? O per a factures rectificatives s’ha de calcular el període de liquidació d’una altra manera?
+
+                                        Tal i com se estableix en “preguntes frecuentes” la data de l’operació en les factures rectificatives serà la de la data d’emissió de la factura que es rectifica. En quant al període a informar, dependrà del tipus de correcció que es tracti:
+
+        ·                                           - Si les rectificacions corresponen a algunes de les causes regulades a l’article 80 de la Llei, el meritament de l’IVA a regularitzar es produirà en el moment d’emetre la factura rectificativa i, per tant, el període a informar serà el que correspongui a la data de la seva emissió.
+
+        ·                                           - Per contra, si es tracta de la rectificació d’un error material (p.e. aplicació d’un tipus d’IVA erroni,...), en aquest cas, s’hauria d’informar del període corresponent a la factura original que es rectifica, el que suposaria haver de fer la corresponent declaració complementària.
+                                -->
+                                <set name='m_dia_01'><date.mdy><date.month><p_fecha_base_periodo/></date.month><number>1</number><date.year><p_fecha_base_periodo/></date.year></date.mdy></set>
+                                <!-- FAQ  4.9. ¿Qué información se consigna en el bloque “Período de liquidación”?
+
+                                El ejercicio y período de recepción de la factura registrada que a su vez permita efectuar la deducción.
+
+                                Ejemplo 1: Un empresario A vende mercancía a otro empresario B el 26 de septiembre de 2017. El empresario A expide la factura el 2 de octubre. El empresario B recibe la factura el 6 de octubre y efectúa su registro contable el 10 de octubre.
+                                El empresario B remitirá los registros de la factura el 23 de octubre consignando en el Libro Registro de facturas recibidas, Ejercicio: 2017, Período: 10.
+
+                                Ejemplo 2: Un empresario A vende mercancía a otro empresario B el 26 de septiembre de 2017. El empresario A expide la factura el 27 de septiembre. El empresario B recibe la factura el 30 de septiembre y efectúa su registro contable el 10 de octubre.
+
+                                Caben dos posibilidades:
+
+                                a) El empresario B remitirá los registros de la factura el 16 de octubre consignando en el Libro Registro de facturas recibidas, Ejercicio: 2017, Período: 09.
+
+                                b) El empresario B remitirá los registros de la factura el 23 de octubre consignando en el Libro Registro de facturas recibidas, Ejercicio: 2017, Período: 10.
+
+                                Hay que tener en cuenta que en el cómputo del plazo de ocho días naturales se excluirán los sábados, los domingos y los declarados festivos nacionales. En el caso de que la fecha límite del 15 del mes siguiente a la deducción sea sábado, domingo o festivo nacional, se trasladará al primer día hábil siguiente.
+                                -->
+                                <set name='m_dia_15'><date.mdy><date.month><p_fecha_base_periodo/></date.month><number>15</number><date.year><p_fecha_base_periodo/></date.year></date.mdy></set>
+
+                                <!-- ======================================================================= -->
+                                <!-- Calendario festividades principales de España                           -->
+                                <!-- Por defecto es: ESP                                                     -->
+                                <!-- ======================================================================= -->
+                                <set name='m_codcal'>
+                                    <execute-function name='es_sii_get_codcal' return-type='char' />
+                                </set>
+
+                                <!-- ======================================================================= -->
+                                <!-- Cálcula el primer día hábil a partir del 15, ejemplos:                  -->
+                                <!--     Si fecha: 15-09-2017  resultado: 15-09-2017                         -->
+                                <!--     Si fecha: 15-10-2017  resultado: 16-10-2017                         -->
+                                <!-- Test: SELECT ccalfesh_get_labor('ESP', mdy(09, 15, 2017), 0), ccalfesh_get_labor('ESP', mdy(10, 15, 2017), 0) FROM wic_dual; -->
+                                <!-- ======================================================================= -->
+                                <set name='m_dia_limite'>
+                                    <execute-function name='ccalfesh_get_labor' return-type='date'>
+                                        <m_codcal/>
+                                        <m_dia_15/>
+                                        <number>0</number>  <!-- Sumar CERO días hábiles ; Si el primer día es hábil devuelve a éste! -->
+                                    </execute-function>
+                                </set>
+                                <if>
+                                    <expr>
+                                        <and>
+                                            <lt><p_fecdoc/><m_dia_01/></lt>
+                                            <le><p_fecha_base_periodo/><m_dia_limite/></le> <!-- Atención: debe considerar la fecha de presentación no la de registro ! -->
+                                        </and>
+                                    </expr>
+                                    <then>
+                                        <set name='m_ultdia_mesant'>
+                                            <sub>
+                                                <m_dia_01/>
+                                                <date.units type='d'>1</date.units>
+                                            </sub>
+                                        </set>
+                                        <set name='p_fecha_base_periodo'><m_ultdia_mesant/></set>
+                                    </then>
+                                </if>
+
+                           </then>
+                        </if>
+
+                    </then>
+                </if>
+
+                <set name='m_ejercicio'><date.year><p_fecha_base_periodo/></date.year></set>
+
+                <!-- ======================================================================= -->
+                <!-- Calcular el periodo de liquidación.                                     -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr><lt><p_fecha_base_periodo /><p_fechainicio /></lt></expr>
+                    <then>
+                        <set name='m_periodo'>0A</set>
+                    </then>
+                    <else>
+
+                        <select prefix='m_'>
+                            <columns>
+                                COUNT(*) count
+                            </columns>
+                            <from table='cimppers' />
+                            <where>
+                                    empcode = <p_empcode />
+                                AND ejerci  = <m_ejercicio />
+                            </where>
+                        </select>
+                        
+                        <if>
+                            <expr><eq><m_count />4</eq></expr>
+                            <then>
+
+                                <select prefix='m_'>
+                                    <columns>
+                                        MIN(fecini) fecini
+                                    </columns>
+                                    <from table='cperiodo' />
+                                    <where>
+                                            empcode = <p_empcode />
+                                        AND ejerci  = <m_ejercicio />
+                                    </where>
+                                </select>
+
+                                <set name='m_month_ini'><date.month><m_fecini /></date.month></set>
+                                <set name='m_month_per'><date.month><p_fecha_base_periodo/></date.month></set>
+
+                                <if>
+                                    <expr><gt><m_month_ini /><m_month_per /></gt></expr>
+                                    <then>
+                                        <set name='m_month_dif'><add><m_month_per /><sub>12<m_month_ini /></sub></add></set>
+                                    </then>
+                                    <else>
+                                        <set name='m_month_dif'><sub><m_month_per /><m_month_ini /></sub></set>
+                                    </else>
+                                </if>
+
+                                <set name='m_periodo'>
+                                    <string>
+                                        <div>
+                                            <add>
+                                                <m_month_dif />
+                                                <sub>
+                                                    <number>3</number>
+                                                    <mod>
+                                                        <m_month_dif />
+                                                        <number>3</number>
+                                                    </mod>
+                                                </sub>
+                                            </add>
+                                            <number>3</number>
+                                        </div>
+                                        <string>T</string>
+                                    </string>
+                                </set>
+
+                            </then>
+                            <else>
+                                <set name='m_periodo' type='string'><string.lpad><date.month><p_fecha_base_periodo/></date.month><number>2</number><string>0</string></string.lpad></set>
+                            </else>
+                        </if>
+                    </else>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <include code='es_sii_get_values' name='after_get_periodo' />
+
+                <return>
+                    <m_ejercicio/>
+                    <m_periodo/>
+                </return>
+            </body>
+        </function>
+
+        <!-- ======================================================================= -->
+        <!-- MAIN PROCESS                                                            -->
+        <!-- ======================================================================= -->
+
+        <!-- ======================================================================= -->
+        <!-- Obtenemos la fecha del dia si estamos en producción o la fecha          -->
+        <!-- definida en la columna es_sii_test.is_today si estamos en modo test.    -->
+        <!-- ======================================================================= -->
+        <set name='m_today'>
+            <execute-function name='es_sii_get_today' return-type='date' />
+        </set>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <select prefix='cimpcont_head_aux_'>
+            <columns>
+                cimpcont_head_aux.*
+            </columns>
+            <from table='cimpcont_head_aux'/>
+            <where>
+                    cimpcont_head_aux.head_seqno  = <p_head_seqno/>
+            </where>
+        </select>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <set name='m_fecha_base_periodo'><null/></set>
+        <set name='m_tipofactura'><null/></set>
+        <set name='m_claveoperaciona0'><null/></set>
+        <set name='m_claveoperaciona1'><null/></set>
+        <set name='m_claveoperaciona2'><null/></set>
+        <set name='m_descoperacion'><null/></set>
+        <set name='m_descoperacion_l2'><null/></set>
+        <set name='m_descoperacion_l3'><null/></set>
+
+        <!-- Claves de operación de determinación automática -->
+        <set name='m_claveoperacion_05'><null/></set>
+        <set name='m_claveoperacion_06'><null/></set>
+        <set name='m_claveoperacion_07'><null/></set>
+        <set name='m_claveoperacion_11'><null/></set>
+        <set name='m_claveoperacion_12'><null/></set>
+        <set name='m_claveoperacion_14'><null/></set>
+
+        <include code='es_sii_get_values' name='before' />
+
+        <!-- ======================================================================= -->
+        <!-- Determina si cimpcont TABLE o cimpcont_v VIEW                           -->
+        <!-- ======================================================================= -->
+        <set name='m_cimpcont_access'><local_get_tableorview>cimpcont</local_get_tableorview></set>
+
+        <!-- ======================================================================= -->
+        <!-- Total factura                                                           -->
+        <!-- ======================================================================= -->
+        <select prefix='m_'>
+            <columns>
+                         <!-- Caso transitorio para certificaciones de obra (basimp + totimp)         -->
+                SUM(CASE WHEN valida = 'R' AND cashvat = 0 THEN basimp + totimp
+                         ELSE import
+                     END) AS importetotal,
+                COUNT(*)           AS regs
+            </columns>
+            <from table='${m_cimpcont_access}' alias='cimpcont' />
+            <where>
+                    empcode = <p_empcode/>
+                AND natfac  = <p_natfac/>
+                AND fecdoc  = <p_fecdoc/>
+                AND cif     = <p_cif_contraparte/>
+                AND docser  = <p_docser/>
+                AND fecha   = <p_fecha/>    <!-- Evita tomar bases de facturas repetidas de años anteriores a 2017.          -->
+                                            <!-- Posible problema facturas repetidas y no detectadas entre años 2016 y 2017. -->
+                AND tipimp != 'R'    <!-- Se excluyen los registros de retenciones. -->
+                <!-- Excluye registros Post-validados de Cobros y/o pagos RECC  -->
+                AND NOT(valida  = 'R' AND cashvat = 1)
+                <!-- Excluye registros No validados de certificaciones de obras -->
+                AND NOT(valida  = 'N' AND cashvat = 0)
+                AND docgen != 'R'    <!-- Excluye los registros generados por el proceso de generación de autofacturas ( XSQL cimpcont_autofact )   -->
+<!--            AND valida != 'R'         Excluye los registros generados por el proceso de validación de impuestos    ( XSQL cimpcont_validacion ) -->
+                <!-- Para el cálculo del importe total de la factura excluimos los gastos     -->
+                <!-- suplidos porque no se informan al censo SII.                             -->
+                AND es_sii_get_is_supplied( cimpcont.opeimp ) = 0
+            </where>
+        </select>
+        <if>
+            <expr>
+                <eq><m_regs/>0</eq>
+            </expr>
+            <then>
+                <exception><string>Error imprevisto. No se han encontrado registros en [cimpcont]. <string.nl/>Identificador: [<p_head_seqno/>]</string></exception>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Verifica que las facturas recibidas con bases ISP Inversión del Sujeto  -->
+        <!-- Pasivo tengan la relación de trasposición bien configurada.             -->
+        <!-- Es un error de parametrización de aparición esporádica.                 -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <eq><p_natfac/>C</eq>
+            </expr>
+            <then>
+                <select prefix='m_'>
+                    <columns>
+                        COUNT(*) AS err_isp
+                    </columns>
+                    <from table='${m_cimpcont_access}' alias='cimpcont' />
+                    <where>
+                            empcode = <p_empcode/>
+                        AND natfac  = <p_natfac/>
+                        AND fecdoc  = <p_fecdoc/>
+                        AND cif     = <p_cif_contraparte/>
+                        AND docser  = <p_docser/>
+                        AND fecha   = <p_fecha/>    <!-- Evita tomar bases de facturas repetidas de años anteriores a 2017.          -->
+                                                    <!-- Posible problema facturas repetidas y no detectadas entre años 2016 y 2017. -->
+                        AND tipimp != 'R'    <!-- Se excluyen los registros de retenciones. -->
+                        <!-- Excluye registros Post-validados de Cobros y/o pagos RECC  -->
+                        AND NOT(valida  = 'R' AND cashvat = 1)
+                        <!-- Excluye registros No validados de certificaciones de obras -->
+                        AND NOT(valida  = 'N' AND cashvat = 0)
+                        AND docgen != 'R'    <!-- Excluye los registros generados por el proceso de generación de autofacturas ( XSQL cimpcont_autofact )   -->
+                        <!-- Para el cálculo del importe total de la factura excluimos los gastos     -->
+                        <!-- suplidos porque no se informan al censo SII.                             -->
+                        AND es_sii_get_is_supplied( cimpcont.opeimp ) = 0
+                        AND     EXISTS (SELECT s.opeimp FROM coperimp s WHERE s.opeimp = cimpcont.opeimp AND s.opautr IS NOT NULL)
+                        AND NOT EXISTS (SELECT s.codimp FROM ctipoimp s
+                                         WHERE s.codimp = cimpcont.codimp
+                                           AND cimpcont.fecope BETWEEN s.fecini and s.fecfin
+                                           AND s.impaut IS NOT NULL)
+                    </where>
+                </select>
+                <if>
+                    <expr>
+                        <gt><m_err_isp/>0</gt>
+                    </expr>
+                    <then>
+                        <exception><string>Error de configuración en algunas de las bases definidas como ISP Inversión del Sujeto Pasivo [cimpcont]. <string.nl/>Identificador: [<p_head_seqno/>]</string></exception>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <isnull><m_tipofactura/></isnull>
+            </expr>
+            <then>
+
+                <!-- ======================================================================= -->
+                <!-- Especificación del tipo de factura a dar de alta  { L2 TipoFactura }    -->
+                <!--                                                                         -->
+                <!-- Etiqueta: TipoFactura                                                   -->
+                <!--                                                                         -->
+                <!-- SII    17-05-2017    Versión 0.7                                        -->
+                <!--                                                                         -->
+                <!-- Tipos de facturas emitidas                                              -->
+                <!-- ==========================                                              -->
+                <!-- L2 FE  F1  Factura                                                      -->
+                <!-- L2 FE  F2  Simplificada (ticket)                                        -->
+                <!-- L2 FE  F3  Sustitución de facturas simplificadas declaradas             -->
+                <!-- L2 FE  F4  Asiento resumen de facturas                                  -->
+                <!-- L2 FE  R1  Rectificativa (Error fundado y Art. 80 Uno Dos y Seis LIVA)  -->
+                <!-- L2 FE  R2  Rectificativa (Art 80.3)                                     -->
+                <!-- L2 FE  R3  Rectificativa (Art 80.4)                                     -->
+                <!-- L2 FE  R4  Rectificativa (Resto)                                        -->
+                <!-- L2 FE  R5  Rectificativa en facturas simplificadas                      -->
+                <!--                                                                         -->
+                <!-- Tipos de facturas recibidas                                             -->
+                <!-- ===========================                                             -->
+                <!-- L2 FR  F1  Factura                                                      -->
+                <!-- L2 FR  F2  Simplificada (ticket)                                        -->
+                <!-- L2 FR  F3  Sustitución de facturas simplificadas declaradas (opcional)  -->
+                <!-- L2 FR  F4  Asiento resumen de facturas                                  -->
+                <!-- L2 FR  F5  Importaciones (DUA)                                          -->
+                <!-- L2 FR  F6  Justificantes contables                                      -->
+                <!-- L2 FR  R1  Rectificativa (Error fundado y Art.80.1,2,6 LIVA) (opcional) -->
+                <!-- L2 FR  R2  Rectificativa (Art 80.3) (opcional)                          -->
+                <!-- L2 FR  R3  Rectificativa (Art 80.4) (opcional)                          -->
+                <!-- L2 FR  R4  Rectificativa (Resto) (opcional)                             -->
+                <!-- L2 FR  R5  Rectificativa simplificada (opcional)                        -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <call name='es_sii_get_tipofactura' into='m_tipofactura, m_descoperacion_l2'>
+                    <p_head_seqno/>
+                    <p_empcode/>
+                    <p_proyec/>
+                    <p_seccio/>
+                    <p_zimfis/>
+                    <p_zimter/>
+                    <p_opeimp/>
+                    <p_jusser/>
+                    <p_docser/>
+                    <m_importetotal/>
+                    <p_libro/>
+                    <p_fecdoc/>
+                    <p_fecha/>
+                    <p_idversionsii/>
+                </call>
+
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <not><string.regexp><m_tipofactura/><string>R.*</string></string.regexp></not>
+                        <and/>
+                        <or>
+                            <isnotnull><p_docrec/></isnotnull>
+                            <isnotnull><p_fecrec/></isnotnull>
+                        </or>
+                    </expr>
+                    <then>
+                        <set name='m_tipofactura'>R1</set>    <!-- R1 Factura Rectificativa (Art 80.1 y 80.2 y error fundado en derecho) -->
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Clave de operación deducida:                                            -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas y recibidas:                                          -->
+        <!--     06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)     -->
+        <!--                                                                         -->
+        <!-- Si la empresa pertenece a un grupo de entidades y la operación          -->
+        <!-- no se ha determinado o no es "06" entonces analiza heurísticamente si   -->
+        <!-- la operación es intragrupo y en tal caso asigna la operación "06"       -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_claveoperacion_06/></isnull>
+                    <isnotnull><p_grpent/></isnotnull>
+                </and>
+            </expr>
+            <then>
+                <select prefix='m_' >
+                    <columns>
+                        COUNT(*) AS is_intragroup
+                    </columns>
+                    <from table='cempresa'/>
+                    <where>
+                            empcode = <p_empcode/>
+                        AND grpent  IS NOT NULL
+                        AND grpent  = <nvl>(SELECT s.grpent
+                                              FROM cempresa s
+                                             WHERE s.empcode = icon_get_interempresa( <p_empcode/>,
+                                                                                      <p_tercer/>,
+                                                                                      <p_tipdir/>,
+                                                                                      <p_fecha/>,
+                                                                                      <p_docser/>,
+                                                                                      'cimpcont',
+                                                                                      <p_orden/>
+                                                                                    ) ), <whitespace/></nvl>
+                    </where>
+                </select>
+                <!-- ======================================================================= -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_is_intragroup/>1</eq>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_06' type='string'><string>06</string></set>
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Clave de operación deducida:                                            -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas y recibidas:                                          -->
+        <!--     07  Régimen especial criterio de caja                               -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_claveoperacion_07/></isnull>
+                    <eq><p_cashvat/>1</eq>
+                </and>
+            </expr>
+            <then>
+                <set name='m_claveoperacion_07' type='string'><string>07</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Clave de operación deducida:                                            -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas:                                                      -->
+        <!--     11  Arrendamiento local de negocio sujetas a retención              -->
+        <!--     12  Arrendamiento local de negocio no sujetas a retención           -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_claveoperacion_11/></isnull>
+                    <isnull><m_claveoperacion_12/></isnull>
+                    <eq><p_natfac/>V</eq>
+                    <eq><p_opeimp/>VA</eq>      <!-- VA Ventas nacionales de arrendamientos -->
+                </and>
+            </expr>
+            <then>
+                <if>
+                    <expr>
+                        <gt><p_hay_retenciones/>0</gt>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_11' type='string'><string>11</string></set>
+                    </then>
+                    <else>
+                        <!-- Deberá inforar situación del inmueble y referencia catastral. -->
+                        <set name='m_claveoperacion_12' type='string'><string>12</string></set>
+                    </else>
+                </if>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Clave de operación deducida:                                            -->
+        <!--                                                                         -->
+        <!-- Facturas recibidas:                                                     -->
+        <!--     12  Operaciones de arrendamiento de local de negocio                -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_claveoperacion_12/></isnull>
+                    <eq><p_natfac/>C</eq>
+                    <eq><p_opeimp/>CA</eq>      <!-- CA Compras nacionales de arrendamientos -->
+                </and>
+            </expr>
+            <then>
+                <set name='m_claveoperacion_12' type='string'><string>12</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Clave de operación deducida:                                            -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas:                                                      -->
+        <!--     14  Factura con IVA no devengado en certificaciones de obra AAPP -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <isnull><m_claveoperacion_14/></isnull>
+                    <eq><p_natfac/>V</eq>
+                    <eq><p_valida/>N</eq>
+                    <eq><p_cashvat/>0</eq>
+                </and>
+            </expr>
+            <then>
+                <set name='m_claveoperacion_14' type='string'><string>14</string></set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <isnull><m_claveoperaciona0/></isnull>
+            </expr>
+            <then>
+                <!-- ======================================================================= -->
+                <!-- Claves que identificarán las claves de régimen especial o               -->
+                <!-- transcendencia tributaria.                                              -->
+                <!--                                                                         -->
+                <!-- Etiquetas:                                                              -->
+                <!--     ClaveRegimenEspecialOTrascendencia                                  -->
+                <!--     ClaveRegimenEspecialOTrascendenciaAdicional1                        -->
+                <!--     ClaveRegimenEspecialOTrascendenciaAdicional2                        -->
+                <!--                                                                         -->
+                <!-- SII    17-05-2017    Versión 0.7                                        -->
+                <!--                                                                         -->
+                <!-- Tipos de operaciones para facturas emitidas                             -->
+                <!-- ===========================================                             -->
+                <!-- L3 FE  01  Operación de régimen general                                 -->
+                <!-- L3 FE  02  Exportación                                                  -->
+                <!-- L3 FE  03  Régimen especial de bienes usados, objetos de arte           -->
+                <!-- L3 FE  04  Régimen especial del oro de inversión                        -->
+                <!-- L3 FE  05  Régimen especial de las agencias de viajes                   -->
+                <!-- L3 FE  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+                <!-- L3 FE  07  Régimen especial del criterio de caja                        -->
+                <!-- L3 FE  08  Operaciones sujetas al IPSI / IGIC                           -->
+                <!-- L3 FE  09  Facturación prestaciones de servicios agencias de viaje      -->
+                <!-- L3 FE  10  Cobros por cuenta de terceros de honorarios profesionales... -->
+                <!-- L3 FE  11  Arrendamiento local de negocio sujetas a retención           -->
+                <!-- L3 FE  12  Arrendamiento local de negocio no sujetas a retención        -->
+                <!-- L3 FE  13  Arrendamiento de local de negocio sujetas y no sujetas a ret -->
+                <!-- L3 FE  14  Factura con IVA no devengado en certificaciones de obra AAPP -->
+                <!-- L3 FE  15  Factura con IVA pendiente de devengo en op. tracto sucesivo  -->
+                <!-- L3 FE  16  Primer semestre 2017                                         -->
+                <!--                                                                         -->
+                <!-- Tipos de operaciones para facturas recibidas                            -->
+                <!-- ============================================                            -->
+                <!-- L3 FR  01  Operación de régimen general                                 -->
+                <!-- L3 FR  02  Compensaciones a personas acogidas al REAGYP                 -->
+                <!-- L3 FR  03  Régimen especial de bienes usados, objetos de arte           -->
+                <!-- L3 FR  04  Régimen especial del oro de inversión                        -->
+                <!-- L3 FR  05  Régimen especial de las agencias de viajes                   -->
+                <!-- L3 FR  06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)  -->
+                <!-- L3 FR  07  Régimen especial del criterio de caja                        -->
+                <!-- L3 FR  08  Operaciones sujetas al IPSI / IGIC                           -->
+                <!-- L3 FR  09  Adquisiciones intracomunitarias de bienes y prest.servicios  -->
+                <!-- L3 FR  12  Operaciones de arrendamiento de local de negocio             -->
+                <!-- L3 FR  13  Factura correspondiente a una importación (sin DUA)          -->
+                <!-- L3 FR  14  Primer semestre 2017                                         -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+
+                <!-- ======================================================================= -->
+                <!-- Intenta determinar la operación a partir de la configuración en         -->
+                <!-- la tabla de definiciones es_sii_def_codes                               -->
+                <!-- ======================================================================= -->
+                <call name='es_sii_get_claveoperacion' into='m_claveoperaciona0, m_descoperacion_l3'>
+                    <p_head_seqno/>
+                    <p_empcode/>
+                    <p_proyec/>
+                    <p_seccio/>
+                    <p_zimfis/>
+                    <p_zimter/>
+                    <p_opeimp/>
+                    <p_jusser/>
+                    <p_docser/>
+                    <m_importetotal/>
+                    <p_libro/>
+                    <p_fecdoc/>
+                    <p_fecha/>
+                    <p_idversionsii/>
+                </call>
+
+                <!-- ======================================================================= -->
+                <!-- IPSI / IGIC Facturas emitidas y facturas recibidas                      -->
+                <!--     L3 FE  08  Operaciones sujetas al IPSI / IGIC                       -->
+                <!--     L3 FR  08  Operaciones sujetas al IPSI / IGIC                       -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <isnull><m_claveoperaciona0/></isnull>
+                            <string.regexp><p_zimter/><string>(ESIC|CAN)</string></string.regexp>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperaciona0' type='string'><string>08</string></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Las facturas emitidas a zona impositiva del cliente INT Internacional   -->
+                <!-- tienen clave de operación:                                              -->
+                <!--                                                                         -->
+                <!--    L3 FE  02  Exportación                                               -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <isnull><m_claveoperaciona0/></isnull>
+                            <eq><p_libro/><string>FE</string></eq>
+                            <eq><p_zimter/><string>INT</string></eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperaciona0' type='string'><string>02</string></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Las facturas recibidas a zona impositiva del proveedor EUR Europa       -->
+                <!-- tienen clave de operación:                                              -->
+                <!--                                                                         -->
+                <!-- L3 FR  09  Adquisiciones intracomunitarias de bienes y prest.servicios  -->
+                <!--                                                                         -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <isnull><m_claveoperaciona0/></isnull>
+                            <eq><p_libro/><string>FR</string></eq>
+                            <p_is_eur/>
+<!--                        <eq><p_zimter/><string>EUR</string></eq>  -->
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperaciona0' type='string'><string>09</string></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Intenta determinar la operación a partir de la configuración en         -->
+                <!-- la tabla de definiciones es_sii_def_codes                               -->
+                <!-- ======================================================================= -->
+<!-- fcm - trsslado - Se realiza antes de las propuesta estandard predefinidas:
+                <if>
+                    <expr>
+                        <isnull><m_claveoperaciona0/></isnull>
+                    </expr>
+                    <then>
+                        <call name='es_sii_get_claveoperacion' into='m_claveoperaciona0, m_descoperacion_l3'>
+                            <p_head_seqno/>
+                            <p_empcode/>
+                            <p_proyec/>
+                            <p_seccio/>
+                            <p_zimfis/>
+                            <p_zimter/>
+                            <p_opeimp/>
+                            <p_jusser/>
+                            <p_docser/>
+                            <m_importetotal/>
+                            <p_libro/>
+                            <p_fecdoc/>
+                            <p_fecha/>
+                            <p_idversionsii/>
+                        </call>
+                    </then>
+                </if>
+-->
+                <!-- ======================================================================= -->
+                <!-- Intercambia a m_claveoperacion_06                                       -->
+                <!--     06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)     -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><m_claveoperaciona0/><string>06</string></eq>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_06'><m_claveoperaciona0/></set>
+                        <set name='m_claveoperaciona0'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Intercambia a m_claveoperacion_11                                       -->
+                <!-- Facturas emitidas:                                                      -->
+                <!--     11  Arrendamiento local de negocio sujetas a retención              -->
+                <!--     12  Arrendamiento local de negocio no sujetas a retención           -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><p_natfac/>V</eq>
+                            <eq><m_claveoperaciona0/><string>11</string></eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_11'><m_claveoperaciona0/></set>
+                        <set name='m_claveoperaciona0'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Intercambia a m_claveoperacion_12                                       -->
+                <!-- Facturas emitidas:                                                      -->
+                <!--     12  Arrendamiento local de negocio no sujetas a retención           -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><p_natfac/>V</eq>
+                            <eq><m_claveoperaciona0/><string>12</string></eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_12'><m_claveoperaciona0/></set>
+                        <set name='m_claveoperaciona0'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Intercambia a m_claveoperacion_12                                       -->
+                <!-- Facturas recibidas:                                                     -->
+                <!--     12  Operaciones de arrendamiento de local de negocio                -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <eq><p_natfac/>C</eq>
+                            <eq><m_claveoperaciona0/><string>12</string></eq>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperacion_12'><m_claveoperaciona0/></set>
+                        <set name='m_claveoperaciona0'><null/></set>
+                    </then>
+                </if>
+
+                <!-- ======================================================================= -->
+                <!-- Si no ha encontrado operación por defecto fija:                         -->
+                <!--     01  Operación de régimen general                                    -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <and>
+                            <isnull><m_claveoperaciona0/></isnull>
+                            <isnull><m_claveoperacion_05/></isnull>
+                            <isnull><m_claveoperacion_06/></isnull>
+                            <isnull><m_claveoperacion_07/></isnull>
+                            <isnull><m_claveoperacion_11/></isnull>
+                            <isnull><m_claveoperacion_12/></isnull>
+                            <isnull><m_claveoperacion_14/></isnull>
+                        </and>
+                    </expr>
+                    <then>
+                        <set name='m_claveoperaciona0' type='string'><string>01</string></set>
+                    </then>
+                </if>
+
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Reordena los códigos de las operaciones según especificaciones.         -->
+        <!--                                                                         -->
+        <!-- Facturas emitidas y recibidas:                                          -->
+        <!--     05  Régimen especial de agencias de viaje                           -->
+        <!--     06  Régimen especial grupo de entidades en IVA (Nivel Avanzado)     -->
+        <!--     07  Régimen especial criterio de caja                               -->
+        <!-- Facturas emitidas:                                                      -->
+        <!--     11  Arrendamiento local de negocio sujetas a retención              -->
+        <!--     12  Arrendamiento local de negocio no sujetas a retención           -->
+        <!-- Facturas recibidas:                                                     -->
+        <!--     12  Operaciones de arrendamiento de local de negocio                -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <local_reordenar_operaciones into='m_claveoperaciona0, m_claveoperaciona1, m_claveoperaciona2'>
+            <p_head_seqno/>
+            <p_natfac/>
+            <m_claveoperaciona0/>
+            <m_claveoperacion_05/>  <!-- No soportado ! -->
+            <m_claveoperacion_06/>
+            <m_claveoperacion_07/>
+            <m_claveoperacion_11/>
+            <m_claveoperacion_12/>
+            <m_claveoperacion_14/>
+        </local_reordenar_operaciones>
+
+
+        <!-- ======================================================================= -->
+        <!-- Descripción de la operación.                                            -->
+        <!--                                                                         -->
+        <!--     Orden de prevalencia:                                               -->
+        <!--                                                                         -->
+        <!--         1) Descripción registrada en cimpcont_head                      -->
+        <!--            NOT IMPLEMENTED YET: cimpcont_head_descoperacion             -->
+        <!--                                                                         -->
+        <!--         2) Descripción customizada mediante reglas definidas en el      -->
+        <!--            include del XSQL es_sii_get_descoperacion                    -->
+        <!--                                                                         -->
+        <!--         3) Descripción genérica por tipo de factura                     -->
+        <!--            m_descoperacion_l2                                           -->
+        <!--                                                                         -->
+        <!--         4) Descripción genérica por clase de operación                  -->
+        <!--            m_descoperacion_l3                                           -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <isnull><m_descoperacion/></isnull>
+            </expr>
+            <then>
+                <set name='m_descoperacion'><p_descoperacion/></set>
+                <if>
+                    <expr>
+                        <isnull><m_descoperacion/></isnull>
+                    </expr>
+                    <then>
+                        <call name='es_sii_get_descoperacion' into='m_descoperacion'>
+                            <p_head_seqno/>
+                            <p_empcode/>
+                            <p_proyec/>
+                            <p_seccio/>
+                            <p_zimfis/>
+                            <p_zimter/>
+                            <p_opeimp/>
+                            <p_jusser/>
+                            <p_docser/>
+                            <m_importetotal/>
+                            <p_libro/>
+                            <p_fecdoc/>
+                            <p_fecha/>
+                            <p_idversionsii/>
+                        </call>
+                        <if>
+                            <expr>
+                                <isnull><m_descoperacion/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_descoperacion'><m_descoperacion_l3/></set>
+                            </then>
+                        </if>
+                        <if>
+                            <expr>
+                                <isnull><m_descoperacion/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_descoperacion'><m_descoperacion_l2/></set>
+                            </then>
+                        </if>
+
+                        <!-- fcm transitorio. -->
+                        <if>
+                            <expr>
+                                <isnull><m_descoperacion/></isnull>
+                            </expr>
+                            <then>
+                                <set name='m_descoperacion'>Varios</set>
+                            </then>
+                        </if>
+
+                    </then>
+                </if>
+            </then>
+        </if>
+
+        <select prefix='m_'>
+            <columns>
+                MIN(fechainicio) fechainicio
+            </columns>
+            <from table='cempresa'>
+                <join table='ctercero'>
+                    <on>cempresa.tercer = ctercero.codigo</on>
+                </join>            
+               <join table='es_sii_presentador'>
+                    <on>es_sii_presentador.niftitular = (CASE WHEN ctercero.cif LIKE 'ES%' THEN SUBSTR(ctercero.cif, 3, 20) ELSE ctercero.cif END)</on>
+                </join>                                    
+            </from>                    
+            <where>
+                cempresa.empcode = <p_empcode />
+            </where>
+        </select>
+
+        <set name='m_fechainicio'><ifnull><m_fechainicio /><date.mdy><number>7</number><number>1</number><number>2017</number></date.mdy></ifnull></set>
+
+        <!-- ======================================================================= -->
+        <!-- FUNC local_get_periodo                                                  -->
+        <!--                                                                         -->
+        <!-- Calcula el periodo impositivo.                                          -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <local_get_periodo into='m_ejercicio, m_periodo'>
+            <m_today/>
+            <p_head_seqno/>
+            <p_empcode/>
+            <p_libro/>
+            <p_fecope/>
+            <p_fecdoc/>
+            <p_fecha/>
+            <p_date_created/>
+            <p_fecrec/>
+            <p_docrec/>
+            <m_fecha_base_periodo/>
+            <m_importetotal/>
+            <m_tipofactura/>
+            <m_claveoperaciona0/>
+            <m_claveoperaciona1/>
+            <m_claveoperaciona2/>
+            <m_fechainicio />
+        </local_get_periodo>
+
+        <!-- ======================================================================= -->
+        <!-- Códigos de operación a informar en el primer semestre del 2017          -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <lt><p_fecha/><m_fechainicio /></lt>   <!-- Fecha de contabilización menor a 01-07-2017 -->
+            </expr>
+            <then>
+                <!-- ======================================================================= -->
+                <!-- Facturas emitidas:                                                      -->
+                <!--    1) Informar tipo No Exenta:                                          -->
+                <!--       S1 Sujeta – No exenta - Sin inversion sujeto pasivo               -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><p_libro/><string>FE</string></eq>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Fijamos la clave de operación especial para el primer semestre 2017     -->
+                        <!-- excepto si es un arrendamiento, según FAQ:                              -->
+                        <!--    2.39. ¿Cómo debe suministrarse la información correspondiente al primer semestre? -->
+                        <!--                                                                         -->
+                        <!-- L3 FE  11  Arrendamiento local de negocio sujetas a retención           -->
+                        <!-- L3 FE  12  Arrendamiento local de negocio no sujetas a retención        -->
+                        <!-- L3 FE  13  Arrendamiento de local de negocio sujetas y no sujetas a ret -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <and>
+                                    <not><string.regexp><m_claveoperaciona0/><string>(11|12|13)</string></string.regexp></not>
+                                    <not><string.regexp><ifnull><m_claveoperaciona1/><string/></ifnull><string>(11|12|13)</string></string.regexp></not>
+                                    <not><string.regexp><ifnull><m_claveoperaciona2/><string/></ifnull><string>(11|12|13)</string></string.regexp></not>
+                                </and>
+                            </expr>
+                            <then>
+                                <!-- L3 FE  16  Primer semestre 2017 -->
+                                <set name='m_claveoperaciona0' type='string'><string>16</string></set>
+                                <set name='m_claveoperaciona1'><null/></set>
+                                <set name='m_claveoperaciona2'><null/></set>
+                            </then>
+                        </if>
+                    </then>
+                </if>
+                <!-- ======================================================================= -->
+                <!-- Facturas recibidas:                                                     -->
+                <!--    1) Informar FechaRegContable = Asignar valor por defecto de la fecha -->
+                <!--       del envío.                                                        -->
+                <!--    2) CuotaDeducible = 0                                                -->
+                <!-- ======================================================================= -->
+                <if>
+                    <expr>
+                        <eq><p_libro/><string>FR</string></eq>
+                    </expr>
+                    <then>
+                        <!-- ======================================================================= -->
+                        <!-- Fijamos la clave de operación especial para el primer semestre 2017     -->
+                        <!-- excepto si es un arrendamiento, según FAQ:                              -->
+                        <!--                                                                         -->
+                        <!--    2.39. ¿Cómo debe suministrarse la información correspondiente al primer semestre? -->
+                        <!--                                                                         -->
+                        <!-- L3 FR  12  Operaciones de arrendamiento de local de negocio             -->
+                        <!-- ======================================================================= -->
+                        <if>
+                            <expr>
+                                <and>
+                                    <ne><m_claveoperaciona0/><string>12</string></ne>
+                                    <ne><ifnull><m_claveoperaciona1/><string/></ifnull><string>12</string></ne>
+                                    <ne><ifnull><m_claveoperaciona2/><string/></ifnull><string>12</string></ne>
+                                </and>
+                            </expr>
+                            <then>
+                                <!-- L3 FR  14  Primer semestre 2017 -->
+                                <set name='m_claveoperaciona0' type='string'><string>14</string></set>
+                                <set name='m_claveoperaciona1'><null/></set>
+                                <set name='m_claveoperaciona2'><null/></set>
+                            </then>
+                        </if>
+                    </then>
+                </if>
+                <set name='m_descoperacion'>Registro del primer semestre</set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!-- Readaptación de F4 a F2:                                                -->
+        <!--                                                                         -->
+        <!-- Si el primer y último número de un asiento resumen de facturas          -->
+        <!-- simplificadas es coincidente cambiamos el tipo de factura:              -->
+        <!--                                                                         -->
+        <!--     F4  Asiento resumen de facturas                                     -->
+        <!--     a                                                                   -->
+        <!--     F2  Simplificada (ticket)                                           -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <if>
+            <expr>
+                <and>
+                    <eq><m_tipofactura/><string>F4</string></eq>
+                    <eq><p_docser/><cimpcont_head_aux_last_numfactura/></eq>
+                </and>
+            </expr>
+            <then>
+                <set name='m_tipofactura'>F2</set>
+            </then>
+        </if>
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <include code='es_sii_get_values' name='after' />
+
+        <!-- ======================================================================= -->
+        <!--                                                                         -->
+        <!-- ======================================================================= -->
+        <return>
+            <m_ejercicio/>
+            <m_periodo/>
+            <m_importetotal/>
+            <m_tipofactura/>
+            <m_claveoperaciona0/>
+            <m_claveoperaciona1/>
+            <m_claveoperaciona2/>
+            <m_descoperacion/>
+        </return>
+
+    </body>
+</xsql-script>
